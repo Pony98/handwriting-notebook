@@ -30,7 +30,40 @@ class WorkspaceScreen extends ConsumerStatefulWidget {
 class _WorkspaceScreenState extends ConsumerState<WorkspaceScreen> {
   final GlobalKey _pageExportBoundaryKey = GlobalKey();
   final ImagePicker _imagePicker = ImagePicker();
+  final TransformationController _worksheetZoomController =
+      TransformationController();
+
   int? _activeTopPointerId;
+  int _activeWorksheetPointers = 0;
+
+  /// Fraction of workspace height allocated to the bottom Handwriting Pad (draggable between 0.25 and 0.78)
+  double _padHeightFraction = 0.56;
+  double _currentZoomScale = 1.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _worksheetZoomController.addListener(_onZoomChanged);
+  }
+
+  void _onZoomChanged() {
+    final scale = _worksheetZoomController.value.getMaxScaleOnAxis();
+    if ((scale - _currentZoomScale).abs() > 0.05) {
+      setState(() => _currentZoomScale = scale);
+    }
+  }
+
+  void _resetWorksheetZoom() {
+    _worksheetZoomController.value = Matrix4.identity();
+    setState(() => _currentZoomScale = 1.0);
+  }
+
+  @override
+  void dispose() {
+    _worksheetZoomController.removeListener(_onZoomChanged);
+    _worksheetZoomController.dispose();
+    super.dispose();
+  }
 
   Future<void> _pickAndInsertImage(CanvasNotifier notifier) async {
     final picked = await _imagePicker.pickImage(source: ImageSource.gallery);
@@ -56,6 +89,10 @@ class _WorkspaceScreenState extends ConsumerState<WorkspaceScreen> {
     final state = ref.watch(canvasProvider(widget.initialNotebook));
     final notifier = ref.read(canvasProvider(widget.initialNotebook).notifier);
     final currentPage = state.currentPage;
+
+    // Allow 1-finger pan on the worksheet when in Writing Pad mode (unless using Eraser)
+    final bool isDirectDrawOnPage =
+        !state.isZoomMode || state.activeTool == DrawingToolType.eraser;
 
     return Scaffold(
       backgroundColor: const Color(0xFFE2E8F0),
@@ -127,206 +164,372 @@ class _WorkspaceScreenState extends ConsumerState<WorkspaceScreen> {
             ),
           ),
 
-          // 2. Top Preview / Full Worksheet Area (42% height when Writing Pad is open)
+          // 2. Resizable Split View: Top Worksheet (with 2-finger Pinch-to-Zoom) + Bottom Writing Pad
           Expanded(
-            flex: state.isZoomMode ? 42 : 100,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              child: Center(
-                child: AspectRatio(
-                  aspectRatio:
-                      CanvasConstants.pageWidth / CanvasConstants.pageHeight,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(8),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.1),
-                          blurRadius: 12,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    child: FittedBox(
-                      fit: BoxFit.contain,
-                      child: SizedBox(
-                        width: CanvasConstants.pageWidth,
-                        height: CanvasConstants.pageHeight,
-                        child: Stack(
-                          children: [
-                            // Exportable Page Canvas (Background + Images + Strokes)
-                            RepaintBoundary(
-                              key: _pageExportBoundaryKey,
-                              child: SizedBox(
-                                width: CanvasConstants.pageWidth,
-                                height: CanvasConstants.pageHeight,
-                                child: Stack(
-                                  children: [
-                                    // Paper Background
-                                    Positioned.fill(
-                                      child: CustomPaint(
-                                        painter: PageBackgroundPainter(
-                                          style: currentPage.backgroundStyle,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final totalHeight = constraints.maxHeight;
+                final padHeight = state.isZoomMode
+                    ? (totalHeight * _padHeightFraction)
+                        .clamp(175.0, totalHeight - 130.0)
+                    : 0.0;
+                final worksheetHeight = totalHeight - padHeight;
+
+                return Column(
+                  children: [
+                    // TOP WORKSHEET PREVIEW (Supports 2-Finger Pinch-to-Zoom & Pan!)
+                    SizedBox(
+                      height: worksheetHeight,
+                      width: double.infinity,
+                      child: Stack(
+                        children: [
+                          Listener(
+                            onPointerDown: (_) =>
+                                setState(() => _activeWorksheetPointers++),
+                            onPointerUp: (_) => setState(
+                              () => _activeWorksheetPointers =
+                                  (_activeWorksheetPointers - 1).clamp(0, 10),
+                            ),
+                            onPointerCancel: (_) => setState(
+                              () => _activeWorksheetPointers =
+                                  (_activeWorksheetPointers - 1).clamp(0, 10),
+                            ),
+                            child: InteractiveViewer(
+                              transformationController: _worksheetZoomController,
+                              minScale: 1.0,
+                              maxScale: 5.0,
+                              panEnabled: !isDirectDrawOnPage ||
+                                  _activeWorksheetPointers >= 2,
+                              scaleEnabled: true,
+                              boundaryMargin: const EdgeInsets.all(120),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 6,
+                                ),
+                                child: Center(
+                                  child: AspectRatio(
+                                    aspectRatio: CanvasConstants.pageWidth /
+                                        CanvasConstants.pageHeight,
+                                    child: Container(
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        borderRadius: BorderRadius.circular(8),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Colors.black
+                                                .withValues(alpha: 0.1),
+                                            blurRadius: 12,
+                                            offset: const Offset(0, 4),
+                                          ),
+                                        ],
+                                      ),
+                                      clipBehavior: Clip.antiAlias,
+                                      child: FittedBox(
+                                        fit: BoxFit.contain,
+                                        child: SizedBox(
+                                          width: CanvasConstants.pageWidth,
+                                          height: CanvasConstants.pageHeight,
+                                          child: Stack(
+                                            children: [
+                                              // Exportable Page Canvas
+                                              RepaintBoundary(
+                                                key: _pageExportBoundaryKey,
+                                                child: SizedBox(
+                                                  width:
+                                                      CanvasConstants.pageWidth,
+                                                  height: CanvasConstants
+                                                      .pageHeight,
+                                                  child: Stack(
+                                                    children: [
+                                                      // Paper Background
+                                                      Positioned.fill(
+                                                        child: CustomPaint(
+                                                          painter:
+                                                              PageBackgroundPainter(
+                                                            style: currentPage
+                                                                .backgroundStyle,
+                                                          ),
+                                                        ),
+                                                      ),
+
+                                                      // Inserted Images
+                                                      for (final img
+                                                          in currentPage.images)
+                                                        if (File(img.imagePath)
+                                                            .existsSync())
+                                                          Positioned(
+                                                            left: img.x,
+                                                            top: img.y,
+                                                            width: img.width,
+                                                            height: img.height,
+                                                            child:
+                                                                GestureDetector(
+                                                              onPanUpdate:
+                                                                  (details) {
+                                                                notifier
+                                                                    .updateImagePosition(
+                                                                  img.id,
+                                                                  details.delta,
+                                                                );
+                                                              },
+                                                              onLongPress: () {
+                                                                notifier
+                                                                    .removeImage(
+                                                                  img.id,
+                                                                );
+                                                              },
+                                                              child: Stack(
+                                                                fit: StackFit
+                                                                    .expand,
+                                                                children: [
+                                                                  ClipRRect(
+                                                                    borderRadius:
+                                                                        BorderRadius
+                                                                            .circular(
+                                                                      6,
+                                                                    ),
+                                                                    child: Image
+                                                                        .file(
+                                                                      File(
+                                                                        img.imagePath,
+                                                                      ),
+                                                                      fit: BoxFit
+                                                                          .cover,
+                                                                    ),
+                                                                  ),
+                                                                  Positioned(
+                                                                    right: 4,
+                                                                    top: 4,
+                                                                    child:
+                                                                        GestureDetector(
+                                                                      onTap: () =>
+                                                                          notifier
+                                                                              .removeImage(
+                                                                        img.id,
+                                                                      ),
+                                                                      child:
+                                                                          Container(
+                                                                        padding:
+                                                                            const EdgeInsets
+                                                                                .all(
+                                                                          4,
+                                                                        ),
+                                                                        decoration:
+                                                                            const BoxDecoration(
+                                                                          color:
+                                                                              Colors.black54,
+                                                                          shape:
+                                                                              BoxShape.circle,
+                                                                        ),
+                                                                        child:
+                                                                            const Icon(
+                                                                          Icons
+                                                                              .close,
+                                                                          size:
+                                                                              14,
+                                                                          color:
+                                                                              Colors.white,
+                                                                        ),
+                                                                      ),
+                                                                    ),
+                                                                  ),
+                                                                ],
+                                                              ),
+                                                            ),
+                                                          ),
+
+                                                      // Tap to set Line Cursor OR Direct Drawing
+                                                      Positioned.fill(
+                                                        child: GestureDetector(
+                                                          behavior:
+                                                              HitTestBehavior
+                                                                  .translucent,
+                                                          onTapUp: !isDirectDrawOnPage
+                                                              ? (details) {
+                                                                  notifier
+                                                                      .setCursorFromPageTap(
+                                                                    details
+                                                                        .localPosition,
+                                                                  );
+                                                                }
+                                                              : null,
+                                                          child: Listener(
+                                                            behavior:
+                                                                HitTestBehavior
+                                                                    .translucent,
+                                                            onPointerDown:
+                                                                (event) {
+                                                              if (!isDirectDrawOnPage ||
+                                                                  _activeWorksheetPointers >=
+                                                                      2) {
+                                                                return;
+                                                              }
+                                                              if (_shouldRejectPalm(
+                                                                event,
+                                                                state
+                                                                    .stylusOnlyPalmRejection,
+                                                              )) {
+                                                                return;
+                                                              }
+                                                              _activeTopPointerId =
+                                                                  event.pointer;
+                                                              notifier
+                                                                  .startStroke(
+                                                                event
+                                                                    .localPosition,
+                                                                pressure: event
+                                                                            .pressure >
+                                                                        0
+                                                                    ? event
+                                                                        .pressure
+                                                                    : 0.5,
+                                                              );
+                                                            },
+                                                            onPointerMove:
+                                                                (event) {
+                                                              if (!isDirectDrawOnPage) {
+                                                                return;
+                                                              }
+                                                              if (_activeWorksheetPointers >=
+                                                                  2) {
+                                                                _activeTopPointerId =
+                                                                    null;
+                                                                return;
+                                                              }
+                                                              if (event
+                                                                      .pointer !=
+                                                                  _activeTopPointerId) {
+                                                                return;
+                                                              }
+                                                              notifier
+                                                                  .appendStrokePoint(
+                                                                event
+                                                                    .localPosition,
+                                                                pressure: event
+                                                                            .pressure >
+                                                                        0
+                                                                    ? event
+                                                                        .pressure
+                                                                    : 0.5,
+                                                              );
+                                                            },
+                                                            onPointerUp:
+                                                                (event) {
+                                                              if (!isDirectDrawOnPage) {
+                                                                return;
+                                                              }
+                                                              if (event
+                                                                      .pointer !=
+                                                                  _activeTopPointerId) {
+                                                                return;
+                                                              }
+                                                              _activeTopPointerId =
+                                                                  null;
+                                                              notifier
+                                                                  .endStroke();
+                                                            },
+                                                            child: CustomPaint(
+                                                              painter:
+                                                                  StrokePainter(
+                                                                strokes:
+                                                                    currentPage
+                                                                        .strokes,
+                                                                activeStroke: state
+                                                                    .activeStroke,
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ),
+
+                                              // Active Line Highlight, Writing Cursor (|), and Live Auto-Scaled Preview
+                                              if (state.isZoomMode)
+                                                Positioned.fill(
+                                                  child: ZoomTargetBox(
+                                                    state: state,
+                                                  ),
+                                                ),
+                                            ],
+                                          ),
                                         ),
                                       ),
                                     ),
-
-                                    // Inserted Images (Draggable & Deletable)
-                                    for (final img in currentPage.images)
-                                      if (File(img.imagePath).existsSync())
-                                        Positioned(
-                                          left: img.x,
-                                          top: img.y,
-                                          width: img.width,
-                                          height: img.height,
-                                          child: GestureDetector(
-                                            onPanUpdate: (details) {
-                                              notifier.updateImagePosition(
-                                                img.id,
-                                                details.delta,
-                                              );
-                                            },
-                                            onLongPress: () {
-                                              notifier.removeImage(img.id);
-                                            },
-                                            child: Stack(
-                                              fit: StackFit.expand,
-                                              children: [
-                                                ClipRRect(
-                                                  borderRadius:
-                                                      BorderRadius.circular(6),
-                                                  child: Image.file(
-                                                    File(img.imagePath),
-                                                    fit: BoxFit.cover,
-                                                  ),
-                                                ),
-                                                Positioned(
-                                                  right: 4,
-                                                  top: 4,
-                                                  child: GestureDetector(
-                                                    onTap: () => notifier
-                                                        .removeImage(img.id),
-                                                    child: Container(
-                                                      padding:
-                                                          const EdgeInsets.all(
-                                                        4,
-                                                      ),
-                                                      decoration:
-                                                          const BoxDecoration(
-                                                        color: Colors.black54,
-                                                        shape: BoxShape.circle,
-                                                      ),
-                                                      child: const Icon(
-                                                        Icons.close,
-                                                        size: 14,
-                                                        color: Colors.white,
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        ),
-
-                                    // Direct Drawing Listener on Full Page (or Tap to move Line Cursor)
-                                    Positioned.fill(
-                                      child: Listener(
-                                        behavior: HitTestBehavior.translucent,
-                                        onPointerDown: (event) {
-                                          if (state.isZoomMode &&
-                                              state.activeTool !=
-                                                  DrawingToolType.eraser) {
-                                            // Tapping anywhere on the worksheet moves the writing cursor to that line & X position!
-                                            notifier.setCursorFromPageTap(
-                                              event.localPosition,
-                                            );
-                                            return;
-                                          }
-
-                                          if (_shouldRejectPalm(
-                                            event,
-                                            state.stylusOnlyPalmRejection,
-                                          )) {
-                                            return;
-                                          }
-                                          _activeTopPointerId = event.pointer;
-                                          notifier.startStroke(
-                                            event.localPosition,
-                                            pressure: event.pressure > 0
-                                                ? event.pressure
-                                                : 0.5,
-                                          );
-                                        },
-                                        onPointerMove: (event) {
-                                          if (state.isZoomMode &&
-                                              state.activeTool !=
-                                                  DrawingToolType.eraser) {
-                                            return;
-                                          }
-                                          if (event.pointer !=
-                                              _activeTopPointerId) {
-                                            return;
-                                          }
-                                          notifier.appendStrokePoint(
-                                            event.localPosition,
-                                            pressure: event.pressure > 0
-                                                ? event.pressure
-                                                : 0.5,
-                                          );
-                                        },
-                                        onPointerUp: (event) {
-                                          if (state.isZoomMode &&
-                                              state.activeTool !=
-                                                  DrawingToolType.eraser) {
-                                            return;
-                                          }
-                                          if (event.pointer !=
-                                              _activeTopPointerId) {
-                                            return;
-                                          }
-                                          _activeTopPointerId = null;
-                                          notifier.endStroke();
-                                        },
-                                        child: CustomPaint(
-                                          painter: StrokePainter(
-                                            strokes: currentPage.strokes,
-                                            activeStroke: state.activeStroke,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
+                                  ),
                                 ),
                               ),
                             ),
+                          ),
 
-                            // Active Line Highlight, Writing Cursor (|), and Live Auto-Scaled Preview
-                            if (state.isZoomMode)
-                              Positioned.fill(
-                                child: ZoomTargetBox(state: state),
+                          // Floating Reset Zoom Badge (shown when user zoomed in with 2 fingers)
+                          if (_currentZoomScale > 1.05)
+                            Positioned(
+                              right: 12,
+                              bottom: 10,
+                              child: Material(
+                                color: Colors.black.withValues(alpha: 0.72),
+                                borderRadius: BorderRadius.circular(20),
+                                child: InkWell(
+                                  onTap: _resetWorksheetZoom,
+                                  borderRadius: BorderRadius.circular(20),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 5,
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        const Icon(
+                                          Icons.zoom_out_map_rounded,
+                                          size: 14,
+                                          color: Colors.white,
+                                        ),
+                                        const SizedBox(width: 5),
+                                        Text(
+                                          '${(_currentZoomScale * 100).round()}% • ចុចបង្រួមវិញ',
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
                               ),
-                          ],
-                        ),
+                            ),
+                        ],
                       ),
                     ),
-                  ),
-                ),
-              ),
+
+                    // BOTTOM RESIZABLE HANDWRITING PAD
+                    if (state.isZoomMode)
+                      SizedBox(
+                        height: padHeight,
+                        width: double.infinity,
+                        child: ZoomWritingPad(
+                          state: state,
+                          notifier: notifier,
+                          onVerticalResizeDelta: (dy) {
+                            setState(() {
+                              _padHeightFraction = (_padHeightFraction -
+                                      (dy / totalHeight))
+                                  .clamp(0.24, 0.78);
+                            });
+                          },
+                        ),
+                      ),
+                  ],
+                );
+              },
             ),
           ),
-
-          // 3. Bottom Large Handwriting Pad (58% screen height - Google Handwriting Keyboard style)
-          if (state.isZoomMode)
-            Expanded(
-              flex: 58,
-              child: ZoomWritingPad(
-                state: state,
-                notifier: notifier,
-              ),
-            ),
         ],
       ),
     );

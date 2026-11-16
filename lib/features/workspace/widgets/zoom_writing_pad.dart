@@ -8,11 +8,13 @@ import 'stroke_painter.dart';
 class ZoomWritingPad extends StatefulWidget {
   final CanvasState state;
   final CanvasNotifier notifier;
+  final ValueChanged<double>? onVerticalResizeDelta;
 
   const ZoomWritingPad({
     super.key,
     required this.state,
     required this.notifier,
+    this.onVerticalResizeDelta,
   });
 
   @override
@@ -67,12 +69,9 @@ class _ZoomWritingPadState extends State<ZoomWritingPad> {
     return Container(
       decoration: BoxDecoration(
         color: const Color(0xFFF1F5F9),
-        border: const Border(
-          top: BorderSide(color: AppColors.primary, width: 2.5),
-        ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.12),
+            color: Colors.black.withValues(alpha: 0.14),
             blurRadius: 12,
             offset: const Offset(0, -3),
           ),
@@ -80,62 +79,90 @@ class _ZoomWritingPadState extends State<ZoomWritingPad> {
       ),
       child: Column(
         children: [
-          // 1. Header Bar: Status & Auto-Insert toggle
-          Container(
-            height: 40,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            color: const Color(0xFFE2E8F0),
-            child: Row(
+          // 1. Interactive Draggable Blue Splitter Bar + Header
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onVerticalDragUpdate: (details) {
+              widget.onVerticalResizeDelta?.call(details.delta.dy);
+            },
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(
-                  Icons.draw_rounded,
-                  size: 18,
+                // Blue Interactive Drag Handle Bar
+                Container(
+                  width: double.infinity,
+                  height: 16,
                   color: AppColors.primary,
-                ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    hasPadInk
-                        ? 'កំពុងសរសេរ... (នឹងបង្រួមដាក់ចូលជួរដោយស្វ័យប្រវត្តិ)'
-                        : 'សរសេរអក្សរធំៗនៅទីនេះ វានឹងតម្រឹមដាក់ចូលជួរខាងលើស្មើគ្នា',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary,
+                  alignment: Alignment.center,
+                  child: Container(
+                    width: 46,
+                    height: 4.5,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.9),
+                      borderRadius: BorderRadius.circular(10),
                     ),
                   ),
                 ),
-                const SizedBox(width: 6),
-                // Auto-commit toggle chip
-                InkWell(
-                  onTap: widget.notifier.toggleAutoCommitPad,
-                  borderRadius: BorderRadius.circular(14),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: widget.state.autoCommitPad
-                          ? AppColors.primary
-                          : Colors.white,
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: AppColors.primary),
-                    ),
-                    child: Text(
-                      widget.state.autoCommitPad
-                          ? 'ដាក់ចូលស្វ័យប្រវត្តិ: បើក'
-                          : 'ដាក់ចូលស្វ័យប្រវត្តិ: បិទ',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: widget.state.autoCommitPad
-                            ? Colors.white
-                            : AppColors.primary,
+
+                // Header Sub-bar (Also draggable to resize!)
+                Container(
+                  height: 36,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  color: const Color(0xFFE2E8F0),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.swap_vert_rounded,
+                        size: 17,
+                        color: AppColors.primary,
                       ),
-                    ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          hasPadInk
+                              ? 'កំពុងសរសេរ... (នឹងបង្រួមដាក់ចូលជួរដោយស្វ័យប្រវត្តិ)'
+                              : 'អូសបន្ទាត់ខៀវឡើង/ចុះដើម្បីពង្រីកផ្ទាំងសរសេរ',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      // Auto-commit toggle chip
+                      InkWell(
+                        onTap: widget.notifier.toggleAutoCommitPad,
+                        borderRadius: BorderRadius.circular(14),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 3,
+                          ),
+                          decoration: BoxDecoration(
+                            color: widget.state.autoCommitPad
+                                ? AppColors.primary
+                                : Colors.white,
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: AppColors.primary),
+                          ),
+                          child: Text(
+                            widget.state.autoCommitPad
+                                ? 'ដាក់ចូលស្វ័យប្រវត្តិ: បើក'
+                                : 'ដាក់ចូលស្វ័យប្រវត្តិ: បិទ',
+                            style: TextStyle(
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.w600,
+                              color: widget.state.autoCommitPad
+                                  ? Colors.white
+                                  : AppColors.primary,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
@@ -222,7 +249,7 @@ class _ZoomWritingPadState extends State<ZoomWritingPad> {
                             children: [
                               Icon(
                                 Icons.gesture_rounded,
-                                size: 36,
+                                size: 34,
                                 color: AppColors.textSecondary
                                     .withValues(alpha: 0.25),
                               ),
@@ -230,7 +257,7 @@ class _ZoomWritingPadState extends State<ZoomWritingPad> {
                               Text(
                                 'សរសេរអក្សរដោយដៃនៅទីនេះ (ទំហំប៉ុនណាក៏បាន)',
                                 style: TextStyle(
-                                  fontSize: 15,
+                                  fontSize: 14,
                                   fontWeight: FontWeight.w600,
                                   color: AppColors.textSecondary
                                       .withValues(alpha: 0.45),
