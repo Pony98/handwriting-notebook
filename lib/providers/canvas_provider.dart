@@ -5,7 +5,9 @@ import 'package:uuid/uuid.dart';
 import '../core/constants/app_colors.dart';
 import '../core/constants/canvas_constants.dart';
 import '../core/services/local_storage_service.dart';
+import '../core/utils/handwriting_recognizer.dart';
 import '../models/canvas_image_model.dart';
+import '../models/canvas_text_model.dart';
 import '../models/note_page_model.dart';
 import '../models/notebook_model.dart';
 import '../models/stroke_model.dart';
@@ -13,11 +15,13 @@ import 'notebook_provider.dart';
 
 class UndoSnapshot {
   final List<StrokeModel> strokes;
+  final List<CanvasTextModel> texts;
   final double cursorX;
   final int cursorLineIndex;
 
   const UndoSnapshot({
     required this.strokes,
+    required this.texts,
     required this.cursorX,
     required this.cursorLineIndex,
   });
@@ -62,7 +66,6 @@ class _StrokeCluster {
     final overlap = overlapEnd - overlapStart;
     final minWidth = math.min(width, other.width);
 
-    // Connected or vertically stacked parts of the same character (e.g. Khmer vowel/subscript or crossed strokes)
     if (overlap >= -6.0 &&
         (overlap >= minWidth * 0.22 ||
             (other.centerX >= minX - 8.0 && other.centerX <= maxX + 8.0) ||
@@ -91,9 +94,18 @@ class CanvasState {
   final double highlighterWidth;
   final double eraserRadius;
 
-  /// Handwriting Pad Mode (Google Keyboard Handwriting style)
+  /// Handwriting Pad Mode
   final bool isZoomMode;
   final bool autoCommitPad;
+
+  /// Printed Font Mode (អក្សរពុម្ភ) vs Handwriting Ink Mode (អក្សរដៃ)
+  final bool isPrintedTextMode;
+  final RecognitionLanguage recognitionLanguage;
+  final bool strictStrokeValidation;
+  final bool isRecognizing;
+  final String? validationFeedback;
+  final bool isValidationError;
+  final List<String> recognizedCandidates;
 
   /// Current writing cursor on the worksheet (line index & horizontal X)
   final int cursorLineIndex;
@@ -119,11 +131,18 @@ class CanvasState {
     this.activeTool = DrawingToolType.pen,
     this.penColor = const Color(0xFF0F172A),
     this.highlighterColor = const Color(0xFFFDE047),
-    this.penWidth = 3.2,
+    this.penWidth = 3.5,
     this.highlighterWidth = 14.0,
     this.eraserRadius = 18.0,
     this.isZoomMode = true,
     this.autoCommitPad = true,
+    this.isPrintedTextMode = true,
+    this.recognitionLanguage = RecognitionLanguage.chinese,
+    this.strictStrokeValidation = true,
+    this.isRecognizing = false,
+    this.validationFeedback,
+    this.isValidationError = false,
+    this.recognizedCandidates = const [],
     this.cursorLineIndex = 1,
     this.cursorX = CanvasConstants.leftWritingMargin,
     this.padStrokes = const [],
@@ -141,18 +160,20 @@ class CanvasState {
   bool get hasUncommittedPadInk =>
       padStrokes.isNotEmpty || activePadStroke != null;
 
-  /// Y coordinate of the baseline of the current ruled row
   double get currentLineBaselineY =>
       CanvasConstants.pageTopMargin +
       (cursorLineIndex * CanvasConstants.defaultLineSpacing);
 
-  /// Top Y coordinate of the current ruled row
   double get currentLineTopY =>
       currentLineBaselineY - CanvasConstants.defaultLineSpacing;
 
-  /// Groups pad strokes into individual character clusters, scales each character to uniform height,
-  /// enforces 100% uniform horizontal spacing (`uniformCharGap`) between every character,
-  /// and applies 100% uniform stroke thickness (`normalizedStrokeWidth`).
+  /// Font size for Printed Font Mode scaled according to Pen Width setting
+  double get printedFontSize => (17.0 + (penWidth - 1.0) * 0.95).clamp(16.0, 26.0);
+
+  /// Font weight index (3=w400, 4=w500, 5=w600, 6=w700, 7=w800) based on Pen Width
+  int get printedFontWeightIndex =>
+      (3 + ((penWidth - 1.0) / 2.2).floor()).clamp(3, 7);
+
   NormalizedPadResult? computeNormalizedPadPreview() {
     final allPadStrokes = [
       ...padStrokes,
@@ -160,7 +181,6 @@ class CanvasState {
     ];
     if (allPadStrokes.isEmpty) return null;
 
-    // 1. Build initial bounding box for each stroke
     final List<_StrokeCluster> clusters = [];
     for (final s in allPadStrokes) {
       if (s.points.isEmpty) continue;
@@ -187,7 +207,6 @@ class CanvasState {
 
     if (clusters.isEmpty) return null;
 
-    // 2. Sort clusters left-to-right and merge strokes belonging to the same character
     clusters.sort((a, b) => a.minX.compareTo(b.minX));
     final List<_StrokeCluster> mergedClusters = [];
     for (final c in clusters) {
@@ -203,11 +222,10 @@ class CanvasState {
       }
     }
 
-    // 3. Calculate uniform scale and total width with equal spacing between every character cluster
     const targetHeight = CanvasConstants.targetLineFitHeight;
     const charGap = CanvasConstants.uniformCharGap;
-    final double uniformPenStrokeWidth =
-        (penWidth * 0.62).clamp(1.8, 3.6);
+    // Direct reflection of user's chosen penWidth on the worksheet!
+    final double uniformPenStrokeWidth = (penWidth * 0.72).clamp(1.0, 9.0);
 
     final List<double> clusterScales = [];
     double totalWidth = 0.0;
@@ -216,7 +234,6 @@ class CanvasState {
       final c = mergedClusters[i];
       double scale;
       if (c.height < 32.0 && c.width < 32.0) {
-        // Small punctuation mark / dot / dash
         scale = targetHeight / 64.0;
       } else {
         scale = targetHeight / c.height;
@@ -228,7 +245,6 @@ class CanvasState {
       }
     }
 
-    // Ensure total width never overflows a single full line width
     const maxLineWidth = CanvasConstants.pageWidth -
         CanvasConstants.leftWritingMargin -
         CanvasConstants.rightWritingMargin;
@@ -238,7 +254,6 @@ class CanvasState {
       totalWidth = maxLineWidth;
     }
 
-    // 4. Check if we need to wrap to the next ruled line
     int targetLine = cursorLineIndex;
     double startX = cursorX;
     if (startX + totalWidth >
@@ -252,7 +267,6 @@ class CanvasState {
         (targetLine * CanvasConstants.defaultLineSpacing);
     final lineTopY = lineBottomY - CanvasConstants.defaultLineSpacing;
 
-    // 5. Place each character cluster with equal spacing and identical stroke thickness
     final List<StrokeModel> transformedStrokes = [];
     double runningX = startX;
 
@@ -309,6 +323,14 @@ class CanvasState {
     double? eraserRadius,
     bool? isZoomMode,
     bool? autoCommitPad,
+    bool? isPrintedTextMode,
+    RecognitionLanguage? recognitionLanguage,
+    bool? strictStrokeValidation,
+    bool? isRecognizing,
+    String? validationFeedback,
+    bool clearValidationFeedback = false,
+    bool? isValidationError,
+    List<String>? recognizedCandidates,
     int? cursorLineIndex,
     double? cursorX,
     List<StrokeModel>? padStrokes,
@@ -331,6 +353,16 @@ class CanvasState {
       eraserRadius: eraserRadius ?? this.eraserRadius,
       isZoomMode: isZoomMode ?? this.isZoomMode,
       autoCommitPad: autoCommitPad ?? this.autoCommitPad,
+      isPrintedTextMode: isPrintedTextMode ?? this.isPrintedTextMode,
+      recognitionLanguage: recognitionLanguage ?? this.recognitionLanguage,
+      strictStrokeValidation:
+          strictStrokeValidation ?? this.strictStrokeValidation,
+      isRecognizing: isRecognizing ?? this.isRecognizing,
+      validationFeedback: clearValidationFeedback
+          ? null
+          : (validationFeedback ?? this.validationFeedback),
+      isValidationError: isValidationError ?? this.isValidationError,
+      recognizedCandidates: recognizedCandidates ?? this.recognizedCandidates,
       cursorLineIndex: cursorLineIndex ?? this.cursorLineIndex,
       cursorX: cursorX ?? this.cursorX,
       padStrokes: padStrokes ?? this.padStrokes,
@@ -391,6 +423,30 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
     state = state.copyWith(autoCommitPad: !state.autoCommitPad);
   }
 
+  void togglePrintedTextMode() {
+    state = state.copyWith(
+      isPrintedTextMode: !state.isPrintedTextMode,
+      clearValidationFeedback: true,
+      isValidationError: false,
+    );
+  }
+
+  void setRecognitionLanguage(RecognitionLanguage lang) {
+    state = state.copyWith(
+      recognitionLanguage: lang,
+      clearValidationFeedback: true,
+      isValidationError: false,
+    );
+  }
+
+  void toggleStrictStrokeValidation() {
+    state = state.copyWith(
+      strictStrokeValidation: !state.strictStrokeValidation,
+      clearValidationFeedback: true,
+      isValidationError: false,
+    );
+  }
+
   void toggleStylusOnlyMode() {
     state = state.copyWith(
       stylusOnlyPalmRejection: !state.stylusOnlyPalmRejection,
@@ -404,7 +460,6 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
 
   // ---------------- WORKSHEET LINE CURSOR NAVIGATION ----------------
 
-  /// Moves the writing cursor to wherever the user tapped on the worksheet
   Future<void> setCursorFromPageTap(Offset pagePoint) async {
     if (state.hasUncommittedPadInk) {
       await commitPadStrokesToLine();
@@ -461,6 +516,8 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
     state = state.copyWith(
       padStrokes: const [],
       clearActivePadStroke: true,
+      clearValidationFeedback: true,
+      isValidationError: false,
     );
   }
 
@@ -485,7 +542,11 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
           : state.activeTool,
     );
 
-    state = state.copyWith(activePadStroke: stroke);
+    state = state.copyWith(
+      activePadStroke: stroke,
+      clearValidationFeedback: true,
+      isValidationError: false,
+    );
   }
 
   void appendPadStrokePoint(Offset padPoint, {double pressure = 0.5}) {
@@ -509,14 +570,75 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
       return;
     }
 
+    // Immediate real-time check for backwards stroke direction in Strict Mode
+    final updatedPadStrokes = [...state.padStrokes, current];
+    String? liveFeedback;
+    bool liveError = false;
+
+    if (state.isPrintedTextMode && state.strictStrokeValidation) {
+      final primitive = HandwritingRecognizer.classifyStroke(current);
+      if (primitive == StrokePrimitive.hengBackwards) {
+        liveFeedback =
+            '⚠️ Stroke ទី ${updatedPadStrokes.length} គូសដេកបញ្ច្រាស (←)! ត្រូវគូសពីឆ្វេងទៅស្តាំ (→)';
+        liveError = true;
+      } else if (primitive == StrokePrimitive.shuBackwards) {
+        liveFeedback =
+            '⚠️ Stroke ទី ${updatedPadStrokes.length} គូសឈរបញ្ច្រាស (↑)! ត្រូវគូសពីលើចុះក្រោម (↓)';
+        liveError = true;
+      } else {
+        liveFeedback =
+            'Stroke ទី ${updatedPadStrokes.length}: ${primitive.label}';
+      }
+    }
+
     state = state.copyWith(
-      padStrokes: [...state.padStrokes, current],
+      padStrokes: updatedPadStrokes,
       clearActivePadStroke: true,
+      validationFeedback: liveFeedback,
+      isValidationError: liveError,
     );
   }
 
-  /// Commits normalized pad strokes with uniform thickness and uniform character spacing (`uniformCharGap`)
+  /// Commits pad strokes:
+  /// - In Printed Font Mode (`isPrintedTextMode = true`): validates stroke order/form and inserts Printed Font Text (`CanvasTextModel`).
+  /// - In Handwriting Ink Mode (`isPrintedTextMode = false`): inserts normalized handwriting strokes.
   Future<void> commitPadStrokesToLine() async {
+    final allPadStrokes = [
+      ...state.padStrokes,
+      if (state.activePadStroke != null) state.activePadStroke!,
+    ];
+    if (allPadStrokes.isEmpty) return;
+
+    if (state.isPrintedTextMode) {
+      state = state.copyWith(isRecognizing: true);
+      final validation = await HandwritingRecognizer.validateAndRecognize(
+        strokes: allPadStrokes,
+        language: state.recognitionLanguage,
+        strictStrokeValidation: state.strictStrokeValidation,
+      );
+
+      if (!validation.isValid || validation.recognizedText == null) {
+        // Blocked due to invalid stroke form or wrong stroke order!
+        state = state.copyWith(
+          isRecognizing: false,
+          padStrokes: const [],
+          clearActivePadStroke: true,
+          validationFeedback: validation.feedbackMessage,
+          isValidationError: true,
+          recognizedCandidates: const [],
+        );
+        return;
+      }
+
+      await _insertPrintedTextAtCursor(
+        validation.recognizedText!,
+        candidates: validation.candidates,
+        feedback: validation.feedbackMessage,
+      );
+      return;
+    }
+
+    // Handwriting Ink Mode fallback
     final normalized = state.computeNormalizedPadPreview();
     if (normalized == null || normalized.placedStrokes.isEmpty) {
       clearPadStrokes();
@@ -550,6 +672,116 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
     );
 
     await _updateCurrentPage(updatedPage);
+  }
+
+  /// Inserts a Printed Font character/word at the current cursor position on the worksheet
+  Future<void> _insertPrintedTextAtCursor(
+    String text, {
+    List<String> candidates = const [],
+    String? feedback,
+  }) async {
+    final fontSize = state.printedFontSize;
+    final weightIdx = state.printedFontWeightIndex;
+
+    final tp = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          fontSize: fontSize,
+          fontWeight: FontWeight.values[weightIdx],
+          height: 1.0,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    final textWidth = tp.width;
+    final textHeight = tp.height;
+
+    int targetLine = state.cursorLineIndex;
+    double targetX = state.cursorX;
+
+    if (targetX + textWidth >
+            CanvasConstants.pageWidth - CanvasConstants.rightWritingMargin &&
+        targetX > CanvasConstants.leftWritingMargin + 8.0) {
+      targetLine =
+          math.min(state.cursorLineIndex + 1, CanvasConstants.maxLineCount);
+      targetX = CanvasConstants.leftWritingMargin;
+    }
+
+    final lineBottomY = CanvasConstants.pageTopMargin +
+        (targetLine * CanvasConstants.defaultLineSpacing);
+    final lineTopY = lineBottomY - CanvasConstants.defaultLineSpacing;
+    final targetY =
+        lineTopY + (CanvasConstants.defaultLineSpacing - textHeight) / 2.0;
+
+    _pushUndoSnapshot();
+
+    final newTextItem = CanvasTextModel(
+      id: _uuid.v4(),
+      text: text,
+      x: targetX,
+      y: targetY,
+      fontSize: fontSize,
+      colorValue: state.penColor.toARGB32(),
+      fontWeightIndex: weightIdx,
+    );
+
+    final updatedTexts = [...state.currentPage.texts, newTextItem];
+    final updatedPage = state.currentPage.copyWith(texts: updatedTexts);
+
+    double nextCursorX =
+        targetX + textWidth + CanvasConstants.uniformCharGap;
+    int nextLineIndex = targetLine;
+
+    if (nextCursorX >
+        CanvasConstants.pageWidth - CanvasConstants.rightWritingMargin) {
+      nextCursorX = CanvasConstants.leftWritingMargin;
+      nextLineIndex = math.min(nextLineIndex + 1, CanvasConstants.maxLineCount);
+    }
+
+    state = state.copyWith(
+      isRecognizing: false,
+      padStrokes: const [],
+      clearActivePadStroke: true,
+      cursorX: nextCursorX,
+      cursorLineIndex: nextLineIndex,
+      validationFeedback: feedback,
+      isValidationError: false,
+      recognizedCandidates: candidates,
+    );
+
+    await _updateCurrentPage(updatedPage);
+  }
+
+  /// Replaces the last inserted Printed Font character if the user taps an alternative candidate chip
+  Future<void> replaceLastInsertedCandidate(String candidate) async {
+    if (state.currentPage.texts.isEmpty || state.undoStack.isEmpty) return;
+
+    // Restore previous cursor & texts from top of undoStack, then insert the chosen candidate
+    final lastUndo = state.undoStack.last;
+    final nextUndo = state.undoStack.sublist(0, state.undoStack.length - 1);
+
+    state = state.copyWith(
+      undoStack: nextUndo,
+      cursorX: lastUndo.cursorX,
+      cursorLineIndex: lastUndo.cursorLineIndex,
+      notebook: state.notebook.copyWith(
+        pages: [
+          for (int i = 0; i < state.notebook.pages.length; i++)
+            if (i == state.currentPageIndex)
+              state.currentPage.copyWith(texts: lastUndo.texts)
+            else
+              state.notebook.pages[i],
+        ],
+      ),
+    );
+
+    await _insertPrintedTextAtCursor(
+      candidate,
+      candidates: state.recognizedCandidates,
+      feedback: '✅ បានជ្រើសរើសអក្សរពុម្ភ៖ «$candidate»',
+    );
   }
 
   // ---------------- DIRECT PAGE DRAWING & ERASING ----------------
@@ -622,7 +854,8 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
 
   void _eraseAt(Offset pagePoint) {
     final radiusSq = state.eraserRadius * state.eraserRadius;
-    final remaining = state.currentPage.strokes.where((stroke) {
+
+    final remainingStrokes = state.currentPage.strokes.where((stroke) {
       for (final p in stroke.points) {
         final dx = p.x - pagePoint.dx;
         final dy = p.y - pagePoint.dy;
@@ -633,8 +866,19 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
       return true;
     }).toList();
 
-    if (remaining.length != state.currentPage.strokes.length) {
-      final updatedPage = state.currentPage.copyWith(strokes: remaining);
+    final remainingTexts = state.currentPage.texts.where((t) {
+      final center = Offset(t.x + t.fontSize / 2, t.y + t.fontSize / 2);
+      final dx = center.dx - pagePoint.dx;
+      final dy = center.dy - pagePoint.dy;
+      return dx * dx + dy * dy > radiusSq * 1.4;
+    }).toList();
+
+    if (remainingStrokes.length != state.currentPage.strokes.length ||
+        remainingTexts.length != state.currentPage.texts.length) {
+      final updatedPage = state.currentPage.copyWith(
+        strokes: remainingStrokes,
+        texts: remainingTexts,
+      );
       _updateCurrentPageSync(updatedPage);
     }
   }
@@ -644,6 +888,7 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
   void _pushUndoSnapshot() {
     final snapshot = UndoSnapshot(
       strokes: state.currentPage.strokes,
+      texts: state.currentPage.texts,
       cursorX: state.cursorX,
       cursorLineIndex: state.cursorLineIndex,
     );
@@ -665,6 +910,7 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
     final previous = nextUndo.removeLast();
     final currentSnapshot = UndoSnapshot(
       strokes: state.currentPage.strokes,
+      texts: state.currentPage.texts,
       cursorX: state.cursorX,
       cursorLineIndex: state.cursorLineIndex,
     );
@@ -675,8 +921,12 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
       redoStack: nextRedo,
       cursorX: previous.cursorX,
       cursorLineIndex: previous.cursorLineIndex,
+      recognizedCandidates: const [],
     );
-    final updatedPage = state.currentPage.copyWith(strokes: previous.strokes);
+    final updatedPage = state.currentPage.copyWith(
+      strokes: previous.strokes,
+      texts: previous.texts,
+    );
     await _updateCurrentPage(updatedPage);
   }
 
@@ -686,6 +936,7 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
     final restored = nextRedo.removeLast();
     final currentSnapshot = UndoSnapshot(
       strokes: state.currentPage.strokes,
+      texts: state.currentPage.texts,
       cursorX: state.cursorX,
       cursorLineIndex: state.cursorLineIndex,
     );
@@ -697,7 +948,10 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
       cursorX: restored.cursorX,
       cursorLineIndex: restored.cursorLineIndex,
     );
-    final updatedPage = state.currentPage.copyWith(strokes: restored.strokes);
+    final updatedPage = state.currentPage.copyWith(
+      strokes: restored.strokes,
+      texts: restored.texts,
+    );
     await _updateCurrentPage(updatedPage);
   }
 

@@ -48,18 +48,15 @@ class TopToolbar extends StatelessWidget {
             const SizedBox(width: 4),
             _buildDivider(),
 
-            // Pen Tool + Color/Size popover
+            // Pen Tool + Color/Size popover (Tap to select or open size/color settings)
             _ToolButton(
               icon: Icons.edit_rounded,
-              label: 'ប៊ិច',
+              label: 'ប៊ិច (${state.penWidth.toStringAsFixed(1)})',
               colorIndicator: state.penColor,
               isSelected: state.activeTool == DrawingToolType.pen,
               onTap: () {
-                if (state.activeTool == DrawingToolType.pen) {
-                  _showPenSettingsSheet(context);
-                } else {
-                  notifier.selectTool(DrawingToolType.pen);
-                }
+                notifier.selectTool(DrawingToolType.pen);
+                _showPenSettingsSheet(context);
               },
               onLongPress: () => _showPenSettingsSheet(context),
             ),
@@ -105,7 +102,7 @@ class TopToolbar extends StatelessWidget {
                     : AppColors.textSecondary,
               ),
               label: const Text(
-                'Zoom សរសេរ',
+                'ក្តារសរសេរ',
                 style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
               ),
               selectedColor: AppColors.primaryLight,
@@ -211,61 +208,151 @@ class TopToolbar extends StatelessWidget {
   }
 
   void _showPenSettingsSheet(BuildContext context) {
+    // Declare state variables OUTSIDE StatefulBuilder so slider updates persist properly!
+    double currentWidth = state.penWidth;
+    Color currentColor = state.penColor;
+
     showModalBottomSheet(
       context: context,
       builder: (ctx) {
-        return Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'កំណត់ពណ៌ និងទំហំប៊ិច (Pen Settings)',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-              ),
-              const SizedBox(height: 14),
-              Wrap(
-                spacing: 12,
-                runSpacing: 12,
-                children: AppColors.penColors.map((color) {
-                  final selected =
-                      color.toARGB32() == state.penColor.toARGB32();
-                  return GestureDetector(
-                    onTap: () {
-                      notifier.selectPenColor(color);
-                      Navigator.pop(ctx);
-                    },
-                    child: CircleAvatar(
-                      radius: 18,
-                      backgroundColor: color,
-                      child: selected
-                          ? const Icon(Icons.check, color: Colors.white)
-                          : null,
-                    ),
-                  );
-                }).toList(),
-              ),
-              const SizedBox(height: 18),
-              const Text('ទំហំប៊ិច (Stroke Size)៖'),
-              StatefulBuilder(
-                builder: (context, setModalState) {
-                  double currentWidth = state.penWidth;
-                  return Slider(
-                    value: currentWidth,
-                    min: 1.5,
-                    max: 10.0,
-                    divisions: 17,
-                    label: currentWidth.toStringAsFixed(1),
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'កំណត់ពណ៌ និងទំហំប៊ិច (Pen Settings)',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                      ),
+                      // Live visual thickness badge
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppColors.primaryLight,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: currentWidth.clamp(3.0, 16.0),
+                              height: currentWidth.clamp(3.0, 16.0),
+                              decoration: BoxDecoration(
+                                color: currentColor,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              'ទំហំ: ${currentWidth.toStringAsFixed(1)} px',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.primary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: AppColors.penColors.map((color) {
+                      final selected =
+                          color.toARGB32() == currentColor.toARGB32();
+                      return GestureDetector(
+                        onTap: () {
+                          setModalState(() => currentColor = color);
+                          notifier.selectPenColor(color);
+                        },
+                        child: CircleAvatar(
+                          radius: 18,
+                          backgroundColor: color,
+                          child: selected
+                              ? const Icon(Icons.check, color: Colors.white)
+                              : null,
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 18),
+                  const Text(
+                    'ជ្រើសរើសទំហំប៊ិច / កម្រាស់អក្សរ៖',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 8),
+                  // Quick preset size buttons
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      _SizePresetChip(
+                        label: 'តូច (2.0)',
+                        sizeValue: 2.0,
+                        currentSize: currentWidth,
+                        onSelect: (v) {
+                          setModalState(() => currentWidth = v);
+                          notifier.setPenWidth(v);
+                        },
+                      ),
+                      _SizePresetChip(
+                        label: 'មធ្យម (3.5)',
+                        sizeValue: 3.5,
+                        currentSize: currentWidth,
+                        onSelect: (v) {
+                          setModalState(() => currentWidth = v);
+                          notifier.setPenWidth(v);
+                        },
+                      ),
+                      _SizePresetChip(
+                        label: 'ធំ (6.0)',
+                        sizeValue: 6.0,
+                        currentSize: currentWidth,
+                        onSelect: (v) {
+                          setModalState(() => currentWidth = v);
+                          notifier.setPenWidth(v);
+                        },
+                      ),
+                      _SizePresetChip(
+                        label: 'ធំខ្លាំង (9.5)',
+                        sizeValue: 9.5,
+                        currentSize: currentWidth,
+                        onSelect: (v) {
+                          setModalState(() => currentWidth = v);
+                          notifier.setPenWidth(v);
+                        },
+                      ),
+                    ],
+                  ),
+                  Slider(
+                    value: currentWidth.clamp(1.0, 12.0),
+                    min: 1.0,
+                    max: 12.0,
+                    divisions: 22,
+                    label: '${currentWidth.toStringAsFixed(1)} px',
                     onChanged: (val) {
                       setModalState(() => currentWidth = val);
                       notifier.setPenWidth(val);
                     },
-                  );
-                },
+                  ),
+                ],
               ),
-            ],
-          ),
+            );
+          },
         );
       },
     );
@@ -310,6 +397,31 @@ class TopToolbar extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+class _SizePresetChip extends StatelessWidget {
+  final String label;
+  final double sizeValue;
+  final double currentSize;
+  final ValueChanged<double> onSelect;
+
+  const _SizePresetChip({
+    required this.label,
+    required this.sizeValue,
+    required this.currentSize,
+    required this.onSelect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isSelected = (currentSize - sizeValue).abs() < 0.3;
+    return ChoiceChip(
+      label: Text(label, style: const TextStyle(fontSize: 12)),
+      selected: isSelected,
+      onSelected: (_) => onSelect(sizeValue),
+      selectedColor: AppColors.primaryLight,
     );
   }
 }

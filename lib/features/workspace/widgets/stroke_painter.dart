@@ -1,24 +1,53 @@
 import 'package:flutter/material.dart';
 import 'package:perfect_freehand/perfect_freehand.dart';
+import '../../../models/canvas_text_model.dart';
 import '../../../models/stroke_model.dart';
 
 class StrokePainter extends CustomPainter {
   final List<StrokeModel> strokes;
+  final List<CanvasTextModel> texts;
   final StrokeModel? activeStroke;
 
   const StrokePainter({
     required this.strokes,
+    this.texts = const [],
     this.activeStroke,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
+    // 1. Draw all Printed Font Text elements on the worksheet
+    for (final item in texts) {
+      _drawTextItem(canvas, item);
+    }
+
+    // 2. Draw all Handwriting Ink Strokes
     for (final stroke in strokes) {
       _drawSingleStroke(canvas, stroke);
     }
     if (activeStroke != null) {
       _drawSingleStroke(canvas, activeStroke!);
     }
+  }
+
+  void _drawTextItem(Canvas canvas, CanvasTextModel item) {
+    if (item.text.isEmpty) return;
+
+    final weightIndex = item.fontWeightIndex.clamp(0, FontWeight.values.length - 1);
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: item.text,
+        style: TextStyle(
+          color: Color(item.colorValue),
+          fontSize: item.fontSize,
+          fontWeight: FontWeight.values[weightIndex],
+          height: 1.0,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    textPainter.paint(canvas, Offset(item.x, item.y));
   }
 
   void _drawSingleStroke(Canvas canvas, StrokeModel stroke) {
@@ -34,7 +63,6 @@ class StrokePainter extends CustomPainter {
       ..style = PaintingStyle.fill
       ..blendMode = isHighlighter ? BlendMode.multiply : BlendMode.srcOver;
 
-    // Use uniform pressure (0.5) and thinning: 0.0 so every character has 100% consistent stroke thickness
     final inputPoints = stroke.points
         .map((p) => PointVector(p.x, p.y, 0.5))
         .toList();
@@ -80,6 +108,7 @@ class StrokePainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant StrokePainter oldDelegate) {
     return oldDelegate.strokes != strokes ||
+        oldDelegate.texts != texts ||
         oldDelegate.activeStroke != activeStroke;
   }
 }

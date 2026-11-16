@@ -435,6 +435,9 @@ class _WorkspaceScreenState extends ConsumerState<WorkspaceScreen> {
                                                                 strokes:
                                                                     currentPage
                                                                         .strokes,
+                                                                texts:
+                                                                    currentPage
+                                                                        .texts,
                                                                 activeStroke: state
                                                                     .activeStroke,
                                                               ),

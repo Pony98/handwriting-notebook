@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import '../../../core/constants/app_colors.dart';
+import '../../../core/utils/handwriting_recognizer.dart';
 import '../../../providers/canvas_provider.dart';
 import 'stroke_painter.dart';
 
@@ -25,7 +26,7 @@ class _ZoomWritingPadState extends State<ZoomWritingPad> {
   int? _activePointerId;
   Timer? _autoCommitTimer;
 
-  static const Duration _autoCommitDelay = Duration(milliseconds: 1050);
+  static const Duration _autoCommitDelay = Duration(milliseconds: 1200);
 
   @override
   void dispose() {
@@ -65,6 +66,9 @@ class _ZoomWritingPadState extends State<ZoomWritingPad> {
   @override
   Widget build(BuildContext context) {
     final hasPadInk = widget.state.hasUncommittedPadInk;
+    final feedback = widget.state.validationFeedback;
+    final isError = widget.state.isValidationError;
+    final candidates = widget.state.recognizedCandidates;
 
     return Container(
       decoration: BoxDecoration(
@@ -79,7 +83,7 @@ class _ZoomWritingPadState extends State<ZoomWritingPad> {
       ),
       child: Column(
         children: [
-          // 1. Interactive Draggable Blue Splitter Bar + Header
+          // 1. Interactive Draggable Blue Splitter Bar + Mode Controls Header
           GestureDetector(
             behavior: HitTestBehavior.opaque,
             onVerticalDragUpdate: (details) {
@@ -91,7 +95,7 @@ class _ZoomWritingPadState extends State<ZoomWritingPad> {
                 // Blue Interactive Drag Handle Bar
                 Container(
                   width: double.infinity,
-                  height: 16,
+                  height: 15,
                   color: AppColors.primary,
                   alignment: Alignment.center,
                   child: Container(
@@ -104,84 +108,185 @@ class _ZoomWritingPadState extends State<ZoomWritingPad> {
                   ),
                 ),
 
-                // Header Sub-bar (Also draggable to resize!)
+                // Control Sub-bar (Printed Font vs Ink, Language, Strict Stroke Check, Auto-Insert)
                 Container(
-                  height: 36,
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  height: 38,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
                   color: const Color(0xFFE2E8F0),
-                  child: Row(
-                    children: [
-                      const Icon(
-                        Icons.swap_vert_rounded,
-                        size: 17,
-                        color: AppColors.primary,
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          hasPadInk
-                              ? 'កំពុងសរសេរ... (នឹងបង្រួមដាក់ចូលជួរដោយស្វ័យប្រវត្តិ)'
-                              : 'អូសបន្ទាត់ខៀវឡើង/ចុះដើម្បីពង្រីកផ្ទាំងសរសេរ',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.textPrimary,
-                          ),
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        // Mode Switch: អក្សរពុម្ភ (Printed Font) vs អក្សរដៃ (Handwriting Ink)
+                        _HeaderPill(
+                          label: widget.state.isPrintedTextMode
+                              ? 'ប្រភេទ: អក្សរពុម្ភ'
+                              : 'ប្រភេទ: អក្សរដៃ',
+                          icon: widget.state.isPrintedTextMode
+                              ? Icons.font_download_rounded
+                              : Icons.gesture_rounded,
+                          isActive: widget.state.isPrintedTextMode,
+                          onTap: widget.notifier.togglePrintedTextMode,
                         ),
-                      ),
-                      const SizedBox(width: 6),
-                      // Auto-commit toggle chip
-                      InkWell(
-                        onTap: widget.notifier.toggleAutoCommitPad,
-                        borderRadius: BorderRadius.circular(14),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 3,
-                          ),
-                          decoration: BoxDecoration(
-                            color: widget.state.autoCommitPad
-                                ? AppColors.primary
-                                : Colors.white,
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(color: AppColors.primary),
-                          ),
-                          child: Text(
-                            widget.state.autoCommitPad
-                                ? 'ដាក់ចូលស្វ័យប្រវត្តិ: បើក'
-                                : 'ដាក់ចូលស្វ័យប្រវត្តិ: បិទ',
-                            style: TextStyle(
-                              fontSize: 10.5,
-                              fontWeight: FontWeight.w600,
-                              color: widget.state.autoCommitPad
-                                  ? Colors.white
-                                  : AppColors.primary,
+                        const SizedBox(width: 6),
+
+                        // Language Picker (Only in Printed Font Mode)
+                        if (widget.state.isPrintedTextMode) ...[
+                          PopupMenuButton<RecognitionLanguage>(
+                            tooltip: 'ជ្រើសរើសភាសាអក្សរពុម្ភ',
+                            onSelected: widget.notifier.setRecognitionLanguage,
+                            itemBuilder: (ctx) => RecognitionLanguage.values
+                                .map(
+                                  (lang) => PopupMenuItem(
+                                    value: lang,
+                                    child: Text(lang.label),
+                                  ),
+                                )
+                                .toList(),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 9,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(color: AppColors.primary),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(
+                                    Icons.translate_rounded,
+                                    size: 13,
+                                    color: AppColors.primary,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    widget.state.recognitionLanguage.label,
+                                    style: const TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                      color: AppColors.primary,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
+                          const SizedBox(width: 6),
+
+                          // Strict Stroke Order Check Toggle
+                          _HeaderPill(
+                            label: widget.state.strictStrokeValidation
+                                ? 'ពិនិត្យ Stroke: បើក'
+                                : 'ពិនិត្យ Stroke: បិទ',
+                            icon: Icons.verified_outlined,
+                            isActive: widget.state.strictStrokeValidation,
+                            activeColor: Colors.teal.shade700,
+                            onTap: widget.notifier.toggleStrictStrokeValidation,
+                          ),
+                          const SizedBox(width: 6),
+                        ],
+
+                        // Auto-commit toggle chip
+                        _HeaderPill(
+                          label: widget.state.autoCommitPad
+                              ? 'ដាក់ចូលស្វ័យប្រវត្តិ: បើក'
+                              : 'ដាក់ចូលស្វ័យប្រវត្តិ: បិទ',
+                          icon: Icons.timer_outlined,
+                          isActive: widget.state.autoCommitPad,
+                          onTap: widget.notifier.toggleAutoCommitPad,
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ],
             ),
           ),
 
-          // 2. Large Freeform Handwriting Pad Area (Google Handwriting Keyboard style)
+          // 2. Stroke Validation Feedback / Candidate Bar
+          if (feedback != null || candidates.isNotEmpty)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              color: isError
+                  ? const Color(0xFFFEE2E2)
+                  : const Color(0xFFDCFCE7),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      feedback ?? '',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w700,
+                        color: isError
+                            ? const Color(0xFFB91C1C)
+                            : const Color(0xFF15803D),
+                      ),
+                    ),
+                  ),
+                  if (!isError && candidates.length > 1)
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: candidates.take(4).map((cand) {
+                          return Padding(
+                            padding: const EdgeInsets.only(left: 4),
+                            child: InkWell(
+                              onTap: () => widget.notifier
+                                  .replaceLastInsertedCandidate(cand),
+                              borderRadius: BorderRadius.circular(6),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(
+                                    color: AppColors.primary
+                                        .withValues(alpha: 0.5),
+                                  ),
+                                ),
+                                child: Text(
+                                  cand,
+                                  style: const TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.bold,
+                                    color: AppColors.textPrimary,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+
+          // 3. Large Freeform Handwriting Pad Area
           Expanded(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
+              padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
               child: Container(
                 decoration: BoxDecoration(
                   color: const Color(0xFFFFFEF9),
                   borderRadius: BorderRadius.circular(14),
                   border: Border.all(
-                    color: hasPadInk
-                        ? AppColors.primary
-                        : const Color(0xFFCBD5E1),
-                    width: hasPadInk ? 2.0 : 1.2,
+                    color: isError
+                        ? Colors.red
+                        : (hasPadInk
+                            ? AppColors.primary
+                            : const Color(0xFFCBD5E1)),
+                    width: (hasPadInk || isError) ? 2.0 : 1.2,
                   ),
                   boxShadow: [
                     BoxShadow(
@@ -236,7 +341,7 @@ class _ZoomWritingPadState extends State<ZoomWritingPad> {
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
-                      // Subtle handwriting guide lines inside the pad
+                      // Chinese Tianzige (田字格) + Baseline guide lines inside the pad
                       CustomPaint(
                         painter: _PadGuideLinesPainter(),
                       ),
@@ -248,16 +353,21 @@ class _ZoomWritingPadState extends State<ZoomWritingPad> {
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Icon(
-                                Icons.gesture_rounded,
-                                size: 34,
+                                widget.state.isPrintedTextMode
+                                    ? Icons.translate_rounded
+                                    : Icons.gesture_rounded,
+                                size: 32,
                                 color: AppColors.textSecondary
-                                    .withValues(alpha: 0.25),
+                                    .withValues(alpha: 0.22),
                               ),
                               const SizedBox(height: 6),
                               Text(
-                                'សរសេរអក្សរដោយដៃនៅទីនេះ (ទំហំប៉ុនណាក៏បាន)',
+                                widget.state.isPrintedTextMode
+                                    ? 'សរសេរតាមលំដាប់ Stroke (${widget.state.recognitionLanguage.label}) ដើម្បីបំប្លែងជាអក្សរពុម្ភ'
+                                    : 'សរសេរអក្សរដោយដៃនៅទីនេះ (ទំហំប៉ុនណាក៏បាន)',
+                                textAlign: TextAlign.center,
                                 style: TextStyle(
-                                  fontSize: 14,
+                                  fontSize: 13,
                                   fontWeight: FontWeight.w600,
                                   color: AppColors.textSecondary
                                       .withValues(alpha: 0.45),
@@ -267,22 +377,34 @@ class _ZoomWritingPadState extends State<ZoomWritingPad> {
                           ),
                         ),
 
-                      // User's actual strokes in the pad (scaled up nicely for bold visibility)
+                      // User's actual strokes in the pad
                       CustomPaint(
                         painter: StrokePainter(
                           strokes: widget.state.padStrokes
                               .map(
                                 (s) => s.copyWith(
-                                  strokeWidth: s.strokeWidth * 2.1,
+                                  strokeWidth: s.strokeWidth * 1.8,
                                 ),
                               )
                               .toList(),
                           activeStroke: widget.state.activePadStroke?.copyWith(
                             strokeWidth:
-                                widget.state.activePadStroke!.strokeWidth * 2.1,
+                                widget.state.activePadStroke!.strokeWidth * 1.8,
                           ),
                         ),
                       ),
+
+                      // Loading spinner when recognizing
+                      if (widget.state.isRecognizing)
+                        const Positioned(
+                          right: 10,
+                          top: 10,
+                          child: SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2.2),
+                          ),
+                        ),
                     ],
                   ),
                 ),
@@ -290,12 +412,11 @@ class _ZoomWritingPadState extends State<ZoomWritingPad> {
             ),
           ),
 
-          // 3. Bottom Keyboard-style Action Bar (Clear, Backspace, Space, Insert, New Line)
+          // 4. Bottom Keyboard-style Action Bar (Clear, Backspace, Space/Insert, New Line)
           Container(
             padding: const EdgeInsets.fromLTRB(10, 2, 10, 10),
             child: Row(
               children: [
-                // Clear uncommitted pad strokes
                 _PadActionButton(
                   icon: Icons.refresh_rounded,
                   label: 'សម្អាត',
@@ -308,7 +429,6 @@ class _ZoomWritingPadState extends State<ZoomWritingPad> {
                 ),
                 const SizedBox(width: 8),
 
-                // Backspace / Undo last placed word
                 _PadActionButton(
                   icon: Icons.backspace_outlined,
                   label: 'លុបពាក្យមុន',
@@ -321,7 +441,6 @@ class _ZoomWritingPadState extends State<ZoomWritingPad> {
                 ),
                 const SizedBox(width: 8),
 
-                // Wide Space Bar Button (Commits current word OR inserts space)
                 Expanded(
                   flex: 2,
                   child: SizedBox(
@@ -338,9 +457,14 @@ class _ZoomWritingPadState extends State<ZoomWritingPad> {
                           borderRadius: BorderRadius.circular(10),
                         ),
                       ),
-                      icon: const Icon(Icons.space_bar_rounded, size: 18),
+                      icon: Icon(
+                        hasPadInk
+                            ? Icons.check_circle_outline_rounded
+                            : Icons.space_bar_rounded,
+                        size: 18,
+                      ),
                       label: Text(
-                        hasPadInk ? 'ដាក់ចូលបន្ទាត់ (Insert)' : 'ដកឃ្លា (Space)',
+                        hasPadInk ? 'ផ្ទៀងផ្ទាត់ & ដាក់ចូល' : 'ដកឃ្លា (Space)',
                         style: const TextStyle(
                           fontWeight: FontWeight.w700,
                           fontSize: 13,
@@ -351,7 +475,6 @@ class _ZoomWritingPadState extends State<ZoomWritingPad> {
                 ),
                 const SizedBox(width: 8),
 
-                // New Line Button (Enter)
                 SizedBox(
                   height: 42,
                   child: FilledButton.icon(
@@ -385,6 +508,58 @@ class _ZoomWritingPadState extends State<ZoomWritingPad> {
   }
 }
 
+class _HeaderPill extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool isActive;
+  final Color? activeColor;
+  final VoidCallback onTap;
+
+  const _HeaderPill({
+    required this.label,
+    required this.icon,
+    required this.isActive,
+    this.activeColor,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = activeColor ?? AppColors.primary;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+        decoration: BoxDecoration(
+          color: isActive ? color : Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: color),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 13,
+              color: isActive ? Colors.white : color,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700,
+                color: isActive ? Colors.white : color,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _PadGuideLinesPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
@@ -392,23 +567,18 @@ class _PadGuideLinesPainter extends CustomPainter {
       ..color = const Color(0xFFCBD5E1).withValues(alpha: 0.55)
       ..strokeWidth = 1.0;
 
-    final midY = size.height * 0.52;
-    final baselineY = size.height * 0.78;
+    final midY = size.height * 0.5;
+    final midX = size.width * 0.5;
 
-    // Draw dashed midline
+    // Horizontal center dashed guide (Tianzige style)
     for (double x = 16; x < size.width - 16; x += 12) {
       canvas.drawLine(Offset(x, midY), Offset(x + 6, midY), dashedPaint);
     }
 
-    // Draw solid baseline guide
-    final basePaint = Paint()
-      ..color = const Color(0xFF94A3B8).withValues(alpha: 0.45)
-      ..strokeWidth = 1.4;
-    canvas.drawLine(
-      Offset(16, baselineY),
-      Offset(size.width - 16, baselineY),
-      basePaint,
-    );
+    // Vertical center dashed guide (Tianzige style)
+    for (double y = 12; y < size.height - 12; y += 12) {
+      canvas.drawLine(Offset(midX, y), Offset(midX, y + 6), dashedPaint);
+    }
   }
 
   @override

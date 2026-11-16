@@ -14,7 +14,8 @@ class ZoomTargetBox extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final preview = state.computeNormalizedPadPreview();
+    final preview =
+        state.isPrintedTextMode ? null : state.computeNormalizedPadPreview();
     final activeLineIndex = preview?.targetLineIndex ?? state.cursorLineIndex;
     final activeCursorX = preview != null
         ? preview.targetCursorX + preview.scaledWidth
@@ -47,7 +48,7 @@ class ZoomTargetBox extends StatelessWidget {
             ),
           ),
 
-          // 2. Live auto-scaled preview of uncommitted strokes right inside the row!
+          // 2. Live auto-scaled preview of uncommitted strokes (in Handwriting Ink Mode)
           if (preview != null && preview.placedStrokes.isNotEmpty)
             Positioned.fill(
               child: CustomPaint(

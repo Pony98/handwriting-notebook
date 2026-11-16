@@ -221,7 +221,10 @@ class NotebookCard extends StatelessWidget {
         height: CanvasConstants.pageHeight,
         child: CustomPaint(
           painter: PageBackgroundPainter(style: firstPage.backgroundStyle),
-          foregroundPainter: StrokePainter(strokes: firstPage.strokes),
+          foregroundPainter: StrokePainter(
+            strokes: firstPage.strokes,
+            texts: firstPage.texts,
+          ),
         ),
       ),
     );

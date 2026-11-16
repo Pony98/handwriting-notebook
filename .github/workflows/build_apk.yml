@@ -30,6 +30,7 @@ jobs:
         run: |
           rm -rf android pubspec.lock
           flutter create --platforms=android --project-name handwriting_notebook .
+          sed -i 's/<application/<uses-permission android:name="android.permission.INTERNET"\/>\n    <application/' android/app/src/main/AndroidManifest.xml
           flutter pub get
 
       - name: Build Release APK
