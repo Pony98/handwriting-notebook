@@ -1,0 +1,32 @@
+name: handwriting_notebook
+description: A personal handwriting note-taking application with Split-Screen Zoom Window Mode.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.2.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_riverpod: ^2.6.1
+  hive_ce: ^2.8.0
+  hive_ce_flutter: ^2.1.0
+  path_provider: ^2.1.5
+  perfect_freehand: ^2.3.1
+  image_picker: ^1.1.2
+  pdf: ^3.11.1
+  printing: ^5.13.4
+  gal: ^2.3.0
+  share_plus: ^10.1.2
+  uuid: ^4.5.1
+  intl: ^0.20.1
+  lucide_icons_flutter: ^1.2.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
