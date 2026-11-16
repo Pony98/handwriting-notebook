@@ -1,10 +1,8 @@
-import 'dart:io';
+import 'dart:async';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import '../../../core/constants/app_colors.dart';
-import '../../../core/constants/canvas_constants.dart';
 import '../../../providers/canvas_provider.dart';
-import 'page_background_painter.dart';
 import 'stroke_painter.dart';
 
 class ZoomWritingPad extends StatefulWidget {
@@ -22,35 +20,49 @@ class ZoomWritingPad extends StatefulWidget {
 }
 
 class _ZoomWritingPadState extends State<ZoomWritingPad> {
-  /// Active pointer ID for strict single-pointer + palm rejection
   int? _activePointerId;
+  Timer? _autoCommitTimer;
+
+  static const Duration _autoCommitDelay = Duration(milliseconds: 1050);
+
+  @override
+  void dispose() {
+    _autoCommitTimer?.cancel();
+    super.dispose();
+  }
+
+  void _cancelAutoCommitTimer() {
+    _autoCommitTimer?.cancel();
+    _autoCommitTimer = null;
+  }
+
+  void _scheduleAutoCommitIfEnabled() {
+    _cancelAutoCommitTimer();
+    if (!widget.state.autoCommitPad) return;
+
+    _autoCommitTimer = Timer(_autoCommitDelay, () {
+      if (!mounted) return;
+      if (widget.state.hasUncommittedPadInk && _activePointerId == null) {
+        widget.notifier.commitPadStrokesToLine();
+      }
+    });
+  }
 
   bool _shouldRejectPalm(PointerEvent event) {
-    // 1. If Stylus-Only mode is turned on, ignore non-stylus input
     if (widget.state.stylusOnlyPalmRejection &&
         event.kind != PointerDeviceKind.stylus &&
         event.kind != PointerDeviceKind.invertedStylus) {
       return true;
     }
-
-    // 2. Built-in Palm Guard: reject large contact area (palm resting on screen)
     if (event.kind == PointerDeviceKind.touch && event.size > 14.0) {
       return true;
     }
-
     return false;
-  }
-
-  /// Converts a local point inside the zoomed Writing Pad into virtual Page coordinates
-  Offset _padToPageCoordinates(Offset localPoint, double scale) {
-    final zoomTopLeft = widget.state.zoomBoxRect.topLeft;
-    return zoomTopLeft + (localPoint / scale);
   }
 
   @override
   Widget build(BuildContext context) {
-    final zoomRect = widget.state.zoomBoxRect;
-    final page = widget.state.currentPage;
+    final hasPadInk = widget.state.hasUncommittedPadInk;
 
     return Container(
       decoration: BoxDecoration(
@@ -68,222 +80,276 @@ class _ZoomWritingPadState extends State<ZoomWritingPad> {
       ),
       child: Column(
         children: [
-          // Zoom Writing Pad Header Bar (Navigation & Auto-advance controls)
+          // 1. Header Bar: Status & Auto-Insert toggle
           Container(
-            height: 38,
+            height: 40,
             padding: const EdgeInsets.symmetric(horizontal: 12),
             color: const Color(0xFFE2E8F0),
             child: Row(
               children: [
                 const Icon(
-                  Icons.zoom_in_map_rounded,
-                  size: 16,
+                  Icons.draw_rounded,
+                  size: 18,
                   color: AppColors.primary,
                 ),
                 const SizedBox(width: 6),
-                const Text(
-                  'ផ្ទាំងពង្រីកសរសេរដៃ (Zoom Writing Pad)',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
-                const Spacer(),
-                // Manual Zoom Box Controls (Left, Right, Newline)
-                _SmallNavButton(
-                  icon: Icons.arrow_back_rounded,
-                  tooltip: 'រំកិលទៅឆ្វេង',
-                  onTap: () => widget.notifier.moveZoomBoxTo(
-                    zoomRect.topLeft - const Offset(80, 0),
+                Expanded(
+                  child: Text(
+                    hasPadInk
+                        ? 'កំពុងសរសេរ... (នឹងបង្រួមដាក់ចូលជួរដោយស្វ័យប្រវត្តិ)'
+                        : 'សរសេរអក្សរធំៗនៅទីនេះ វានឹងតម្រឹមដាក់ចូលជួរខាងលើស្មើគ្នា',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 6),
-                _SmallNavButton(
-                  icon: Icons.arrow_forward_rounded,
-                  tooltip: 'រំកិលទៅស្តាំ (Advance)',
-                  onTap: widget.notifier.advanceZoomBox,
-                ),
-                const SizedBox(width: 6),
-                _SmallNavButton(
-                  icon: Icons.keyboard_return_rounded,
-                  tooltip: 'ចុះបន្ទាត់ថ្មី (New Line)',
-                  onTap: widget.notifier.newlineZoomBox,
+                // Auto-commit toggle chip
+                InkWell(
+                  onTap: widget.notifier.toggleAutoCommitPad,
+                  borderRadius: BorderRadius.circular(14),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: widget.state.autoCommitPad
+                          ? AppColors.primary
+                          : Colors.white,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: AppColors.primary),
+                    ),
+                    child: Text(
+                      widget.state.autoCommitPad
+                          ? 'ដាក់ចូលស្វ័យប្រវត្តិ: បើក'
+                          : 'ដាក់ចូលស្វ័យប្រវត្តិ: បិទ',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: widget.state.autoCommitPad
+                            ? Colors.white
+                            : AppColors.primary,
+                      ),
+                    ),
+                  ),
                 ),
               ],
             ),
           ),
 
-          // Magnified Writing Canvas Area
+          // 2. Large Freeform Handwriting Pad Area (Google Handwriting Keyboard style)
           Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                // Calculate uniform scale so zoomBoxRect fits comfortably inside the pad
-                final scaleX = constraints.maxWidth / zoomRect.width;
-                final scaleY = constraints.maxHeight / zoomRect.height;
-                final scale = scaleX < scaleY ? scaleX : scaleY;
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFFEF9),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: hasPadInk
+                        ? AppColors.primary
+                        : const Color(0xFFCBD5E1),
+                    width: hasPadInk ? 2.0 : 1.2,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.04),
+                      blurRadius: 6,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: Listener(
+                  behavior: HitTestBehavior.opaque,
+                  onPointerDown: (event) {
+                    if (_shouldRejectPalm(event)) return;
+                    if (_activePointerId != null &&
+                        event.kind != PointerDeviceKind.stylus) {
+                      return;
+                    }
+                    _cancelAutoCommitTimer();
+                    _activePointerId = event.pointer;
 
-                final padWidth = zoomRect.width * scale;
-                final padHeight = zoomRect.height * scale;
-                final autoAdvanceLeft =
-                    padWidth * (1.0 - CanvasConstants.autoAdvanceZoneFraction);
+                    final pressure =
+                        event.pressure > 0 ? event.pressure : 0.5;
+                    widget.notifier.startPadStroke(
+                      event.localPosition,
+                      pressure: pressure,
+                    );
+                  },
+                  onPointerMove: (event) {
+                    if (event.pointer != _activePointerId) return;
+                    if (_shouldRejectPalm(event)) return;
 
-                return Center(
-                  child: SizedBox(
-                    width: padWidth,
-                    height: padHeight,
-                    child: Listener(
-                      behavior: HitTestBehavior.opaque,
-                      onPointerDown: (event) {
-                        if (_shouldRejectPalm(event)) return;
-                        // If a stylus touches down, override any accidental finger stroke
-                        if (_activePointerId != null &&
-                            event.kind != PointerDeviceKind.stylus) {
-                          return;
+                    final pressure =
+                        event.pressure > 0 ? event.pressure : 0.5;
+                    widget.notifier.appendPadStrokePoint(
+                      event.localPosition,
+                      pressure: pressure,
+                    );
+                  },
+                  onPointerUp: (event) {
+                    if (event.pointer != _activePointerId) return;
+                    _activePointerId = null;
+                    widget.notifier.endPadStroke();
+                    _scheduleAutoCommitIfEnabled();
+                  },
+                  onPointerCancel: (event) {
+                    if (event.pointer != _activePointerId) return;
+                    _activePointerId = null;
+                    widget.notifier.endPadStroke();
+                    _scheduleAutoCommitIfEnabled();
+                  },
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      // Subtle handwriting guide lines inside the pad
+                      CustomPaint(
+                        painter: _PadGuideLinesPainter(),
+                      ),
+
+                      // Watermark hint when pad is empty
+                      if (!hasPadInk)
+                        Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.gesture_rounded,
+                                size: 36,
+                                color: AppColors.textSecondary
+                                    .withValues(alpha: 0.25),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                'សរសេរអក្សរដោយដៃនៅទីនេះ (ទំហំប៉ុនណាក៏បាន)',
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.textSecondary
+                                      .withValues(alpha: 0.45),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                      // User's actual strokes in the pad (scaled up nicely for bold visibility)
+                      CustomPaint(
+                        painter: StrokePainter(
+                          strokes: widget.state.padStrokes
+                              .map(
+                                (s) => s.copyWith(
+                                  strokeWidth: s.strokeWidth * 2.1,
+                                ),
+                              )
+                              .toList(),
+                          activeStroke: widget.state.activePadStroke?.copyWith(
+                            strokeWidth:
+                                widget.state.activePadStroke!.strokeWidth * 2.1,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+          // 3. Bottom Keyboard-style Action Bar (Clear, Backspace, Space, Insert, New Line)
+          Container(
+            padding: const EdgeInsets.fromLTRB(10, 2, 10, 10),
+            child: Row(
+              children: [
+                // Clear uncommitted pad strokes
+                _PadActionButton(
+                  icon: Icons.refresh_rounded,
+                  label: 'សម្អាត',
+                  onTap: hasPadInk
+                      ? () {
+                          _cancelAutoCommitTimer();
+                          widget.notifier.clearPadStrokes();
                         }
-                        _activePointerId = event.pointer;
+                      : null,
+                ),
+                const SizedBox(width: 8),
 
-                        final inAutoZone =
-                            event.localPosition.dx >= autoAdvanceLeft;
-                        final pagePt =
-                            _padToPageCoordinates(event.localPosition, scale);
-                        final pressure =
-                            event.pressure > 0 ? event.pressure : 0.5;
+                // Backspace / Undo last placed word
+                _PadActionButton(
+                  icon: Icons.backspace_outlined,
+                  label: 'លុបពាក្យមុន',
+                  onTap: (hasPadInk || widget.state.canUndo)
+                      ? () {
+                          _cancelAutoCommitTimer();
+                          widget.notifier.undo();
+                        }
+                      : null,
+                ),
+                const SizedBox(width: 8),
 
-                        widget.notifier.startStroke(
-                          pagePt,
-                          pressure: pressure,
-                          inAutoAdvanceZone: inAutoZone,
-                        );
+                // Wide Space Bar Button (Commits current word OR inserts space)
+                Expanded(
+                  flex: 2,
+                  child: SizedBox(
+                    height: 42,
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        _cancelAutoCommitTimer();
+                        widget.notifier.insertSpace();
                       },
-                      onPointerMove: (event) {
-                        if (event.pointer != _activePointerId) return;
-                        if (_shouldRejectPalm(event)) return;
-
-                        final inAutoZone =
-                            event.localPosition.dx >= autoAdvanceLeft;
-                        final pagePt =
-                            _padToPageCoordinates(event.localPosition, scale);
-                        final pressure =
-                            event.pressure > 0 ? event.pressure : 0.5;
-
-                        widget.notifier.appendStrokePoint(
-                          pagePt,
-                          pressure: pressure,
-                          inAutoAdvanceZone: inAutoZone,
-                        );
-                      },
-                      onPointerUp: (event) {
-                        if (event.pointer != _activePointerId) return;
-                        _activePointerId = null;
-                        widget.notifier.endStroke();
-                      },
-                      onPointerCancel: (event) {
-                        if (event.pointer != _activePointerId) return;
-                        _activePointerId = null;
-                        widget.notifier.endStroke();
-                      },
-                      child: ClipRect(
-                        child: Stack(
-                          fit: StackFit.expand,
-                          children: [
-                            // 1. Magnified Viewport of the actual Virtual Page!
-                            Transform(
-                              transform: Matrix4.identity()
-                                ..setEntry(0, 0, scale)
-                                ..setEntry(1, 1, scale)
-                                ..setEntry(0, 3, -zoomRect.left * scale)
-                                ..setEntry(1, 3, -zoomRect.top * scale),
-                              child: SizedBox(
-                                width: CanvasConstants.pageWidth,
-                                height: CanvasConstants.pageHeight,
-                                child: Stack(
-                                  children: [
-                                    Positioned.fill(
-                                      child: CustomPaint(
-                                        painter: PageBackgroundPainter(
-                                          style: page.backgroundStyle,
-                                        ),
-                                      ),
-                                    ),
-                                    // Inserted Images visible inside zoomed area
-                                    for (final img in page.images)
-                                      if (File(img.imagePath).existsSync())
-                                        Positioned(
-                                          left: img.x,
-                                          top: img.y,
-                                          width: img.width,
-                                          height: img.height,
-                                          child: Image.file(
-                                            File(img.imagePath),
-                                            fit: BoxFit.cover,
-                                          ),
-                                        ),
-                                    // Real-time Strokes
-                                    Positioned.fill(
-                                      child: CustomPaint(
-                                        painter: StrokePainter(
-                                          strokes: page.strokes,
-                                          activeStroke:
-                                              widget.state.activeStroke,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-
-                            // 2. Right-side Auto-Advance Zone Overlay
-                            Positioned(
-                              left: autoAdvanceLeft,
-                              top: 0,
-                              right: 0,
-                              bottom: 0,
-                              child: IgnorePointer(
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    color: AppColors.primary
-                                        .withValues(alpha: 0.06),
-                                    border: Border(
-                                      left: BorderSide(
-                                        color: AppColors.primary
-                                            .withValues(alpha: 0.35),
-                                        width: 1.5,
-                                      ),
-                                    ),
-                                  ),
-                                  alignment: Alignment.topRight,
-                                  padding: const EdgeInsets.all(6),
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 6,
-                                      vertical: 2,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: AppColors.primary
-                                          .withValues(alpha: 0.15),
-                                      borderRadius: BorderRadius.circular(4),
-                                    ),
-                                    child: const Text(
-                                      'Auto-Advance »',
-                                      style: TextStyle(
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.w600,
-                                        color: AppColors.primary,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
+                      style: OutlinedButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        side: const BorderSide(color: AppColors.border),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                      icon: const Icon(Icons.space_bar_rounded, size: 18),
+                      label: Text(
+                        hasPadInk ? 'ដាក់ចូលបន្ទាត់ (Insert)' : 'ដកឃ្លា (Space)',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 13,
                         ),
                       ),
                     ),
                   ),
-                );
-              },
+                ),
+                const SizedBox(width: 8),
+
+                // New Line Button (Enter)
+                SizedBox(
+                  height: 42,
+                  child: FilledButton.icon(
+                    onPressed: () {
+                      _cancelAutoCommitTimer();
+                      widget.notifier.insertNewline();
+                    },
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                    ),
+                    icon: const Icon(Icons.keyboard_return_rounded, size: 18),
+                    label: const Text(
+                      'ចុះបន្ទាត់',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -292,32 +358,65 @@ class _ZoomWritingPadState extends State<ZoomWritingPad> {
   }
 }
 
-class _SmallNavButton extends StatelessWidget {
-  final IconData icon;
-  final String tooltip;
-  final VoidCallback onTap;
+class _PadGuideLinesPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final dashedPaint = Paint()
+      ..color = const Color(0xFFCBD5E1).withValues(alpha: 0.55)
+      ..strokeWidth = 1.0;
 
-  const _SmallNavButton({
+    final midY = size.height * 0.52;
+    final baselineY = size.height * 0.78;
+
+    // Draw dashed midline
+    for (double x = 16; x < size.width - 16; x += 12) {
+      canvas.drawLine(Offset(x, midY), Offset(x + 6, midY), dashedPaint);
+    }
+
+    // Draw solid baseline guide
+    final basePaint = Paint()
+      ..color = const Color(0xFF94A3B8).withValues(alpha: 0.45)
+      ..strokeWidth = 1.4;
+    canvas.drawLine(
+      Offset(16, baselineY),
+      Offset(size.width - 16, baselineY),
+      basePaint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _PadActionButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback? onTap;
+
+  const _PadActionButton({
     required this.icon,
-    required this.tooltip,
-    required this.onTap,
+    required this.label,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Tooltip(
-      message: tooltip,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(6),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: AppColors.border),
+    return SizedBox(
+      height: 42,
+      child: OutlinedButton.icon(
+        onPressed: onTap,
+        style: OutlinedButton.styleFrom(
+          backgroundColor: Colors.white,
+          side: const BorderSide(color: AppColors.border),
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
           ),
-          child: Icon(icon, size: 15, color: AppColors.textPrimary),
+        ),
+        icon: Icon(icon, size: 16),
+        label: Text(
+          label,
+          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
         ),
       ),
     );

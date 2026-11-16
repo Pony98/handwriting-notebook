@@ -8,18 +8,23 @@ class CanvasConstants {
   static const double pageHeight = 1131.0;
   static const Size pageSize = Size(pageWidth, pageHeight);
 
-  /// Default Zoom Box size on the virtual page
-  static const double defaultZoomBoxWidth = 260.0;
-  static const double defaultZoomBoxHeight = 95.0;
-
-  /// Left/Right margin for auto-advance newline wrap
+  /// Ruled line geometry on the virtual page
   static const double pageHorizontalMargin = 36.0;
+  static const double leftWritingMargin = 58.0; // Right after the red margin line
+  static const double rightWritingMargin = 28.0;
   static const double pageTopMargin = 60.0;
   static const double defaultLineSpacing = 32.0;
 
-  /// Fraction of the writing pad on the right side that triggers Auto-Advance (e.g. last 22%)
-  static const double autoAdvanceZoneFraction = 0.22;
+  /// Target height for scaled handwriting inside a 32px ruled row
+  static const double targetLineFitHeight = 23.0;
 
-  /// How far the zoom box shifts right on auto-advance (as fraction of zoomBoxWidth)
-  static const double autoAdvanceStepFraction = 0.65;
+  /// Horizontal advance gap after each committed word/group
+  static const double wordGap = 10.0;
+
+  /// Horizontal advance when pressing the Space button
+  static const double spaceAdvance = 24.0;
+
+  /// Total number of ruled lines on a page
+  static int get maxLineCount =>
+      ((pageHeight - 24 - pageTopMargin) / defaultLineSpacing).floor();
 }

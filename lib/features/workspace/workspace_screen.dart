@@ -7,6 +7,7 @@ import '../../core/constants/app_colors.dart';
 import '../../core/constants/canvas_constants.dart';
 import '../../core/utils/export_helper.dart';
 import '../../models/notebook_model.dart';
+import '../../models/stroke_model.dart';
 import '../../providers/canvas_provider.dart';
 import 'widgets/page_background_painter.dart';
 import 'widgets/stroke_painter.dart';
@@ -74,7 +75,7 @@ class _WorkspaceScreenState extends ConsumerState<WorkspaceScreen> {
               ),
             ),
             Text(
-              'ទំព័រទី ${state.currentPageIndex + 1} / ${state.notebook.pages.length} • រក្សាទុកស្វ័យប្រវត្តិ (Auto-saved)',
+              'ទំព័រទី ${state.currentPageIndex + 1} / ${state.notebook.pages.length} • បន្ទាត់ទី ${state.cursorLineIndex}',
               style: const TextStyle(
                 fontSize: 11,
                 color: AppColors.textSecondary,
@@ -126,11 +127,11 @@ class _WorkspaceScreenState extends ConsumerState<WorkspaceScreen> {
             ),
           ),
 
-          // 2. Top Preview / Full Worksheet Area
+          // 2. Top Preview / Full Worksheet Area (42% height when Writing Pad is open)
           Expanded(
-            flex: state.isZoomMode ? 55 : 100,
+            flex: state.isZoomMode ? 42 : 100,
             child: Padding(
-              padding: const EdgeInsets.all(12.0),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               child: Center(
                 child: AspectRatio(
                   aspectRatio:
@@ -230,23 +231,18 @@ class _WorkspaceScreenState extends ConsumerState<WorkspaceScreen> {
                                           ),
                                         ),
 
-                                    // Direct Drawing Listener on Full Page (or Tap to move Zoom Box)
+                                    // Direct Drawing Listener on Full Page (or Tap to move Line Cursor)
                                     Positioned.fill(
                                       child: Listener(
                                         behavior: HitTestBehavior.translucent,
                                         onPointerDown: (event) {
-                                          if (state.isZoomMode) {
-                                            // In Split-Screen Zoom mode, tapping on the preview page jumps the Zoom Target Box there!
-                                            final targetTopLeft =
-                                                event.localPosition -
-                                                    Offset(
-                                                      state.zoomBoxRect.width /
-                                                          2,
-                                                      state.zoomBoxRect.height /
-                                                          2,
-                                                    );
-                                            notifier
-                                                .moveZoomBoxTo(targetTopLeft);
+                                          if (state.isZoomMode &&
+                                              state.activeTool !=
+                                                  DrawingToolType.eraser) {
+                                            // Tapping anywhere on the worksheet moves the writing cursor to that line & X position!
+                                            notifier.setCursorFromPageTap(
+                                              event.localPosition,
+                                            );
                                             return;
                                           }
 
@@ -265,7 +261,11 @@ class _WorkspaceScreenState extends ConsumerState<WorkspaceScreen> {
                                           );
                                         },
                                         onPointerMove: (event) {
-                                          if (state.isZoomMode) return;
+                                          if (state.isZoomMode &&
+                                              state.activeTool !=
+                                                  DrawingToolType.eraser) {
+                                            return;
+                                          }
                                           if (event.pointer !=
                                               _activeTopPointerId) {
                                             return;
@@ -278,7 +278,11 @@ class _WorkspaceScreenState extends ConsumerState<WorkspaceScreen> {
                                           );
                                         },
                                         onPointerUp: (event) {
-                                          if (state.isZoomMode) return;
+                                          if (state.isZoomMode &&
+                                              state.activeTool !=
+                                                  DrawingToolType.eraser) {
+                                            return;
+                                          }
                                           if (event.pointer !=
                                               _activeTopPointerId) {
                                             return;
@@ -299,11 +303,10 @@ class _WorkspaceScreenState extends ConsumerState<WorkspaceScreen> {
                               ),
                             ),
 
-                            // Zoom Target Box Overlay (Only shown on Preview Page, not exported in PDF/PNG)
+                            // Active Line Highlight, Writing Cursor (|), and Live Auto-Scaled Preview
                             if (state.isZoomMode)
-                              ZoomTargetBox(
-                                zoomRect: state.zoomBoxRect,
-                                onMove: notifier.moveZoomBoxTo,
+                              Positioned.fill(
+                                child: ZoomTargetBox(state: state),
                               ),
                           ],
                         ),
@@ -315,10 +318,10 @@ class _WorkspaceScreenState extends ConsumerState<WorkspaceScreen> {
             ),
           ),
 
-          // 3. Bottom Split-Screen Zoom Writing Pad (Real-time sync + Auto-advance + Palm Rejection)
+          // 3. Bottom Large Handwriting Pad (58% screen height - Google Handwriting Keyboard style)
           if (state.isZoomMode)
             Expanded(
-              flex: 45,
+              flex: 58,
               child: ZoomWritingPad(
                 state: state,
                 notifier: notifier,

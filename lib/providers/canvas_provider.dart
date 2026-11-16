@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
@@ -10,6 +11,32 @@ import '../models/notebook_model.dart';
 import '../models/stroke_model.dart';
 import 'notebook_provider.dart';
 
+class UndoSnapshot {
+  final List<StrokeModel> strokes;
+  final double cursorX;
+  final int cursorLineIndex;
+
+  const UndoSnapshot({
+    required this.strokes,
+    required this.cursorX,
+    required this.cursorLineIndex,
+  });
+}
+
+class NormalizedPadResult {
+  final List<StrokeModel> placedStrokes;
+  final double scaledWidth;
+  final double targetCursorX;
+  final int targetLineIndex;
+
+  const NormalizedPadResult({
+    required this.placedStrokes,
+    required this.scaledWidth,
+    required this.targetCursorX,
+    required this.targetLineIndex,
+  });
+}
+
 class CanvasState {
   final NotebookModel notebook;
   final int currentPageIndex;
@@ -20,22 +47,27 @@ class CanvasState {
   final double highlighterWidth;
   final double eraserRadius;
 
-  /// Split-screen Zoom Window Mode
+  /// Handwriting Pad Mode (Google Keyboard Handwriting style)
   final bool isZoomMode;
-  final Rect zoomBoxRect;
+  final bool autoCommitPad;
 
-  /// Palm rejection: when true, only Stylus input is accepted (or strict palm filter)
+  /// Current writing cursor on the worksheet (line index & horizontal X)
+  final int cursorLineIndex;
+  final double cursorX;
+
+  /// Strokes currently written in the bottom Handwriting Pad before committing to the line
+  final List<StrokeModel> padStrokes;
+  final StrokeModel? activePadStroke;
+
+  /// Palm rejection: when true, only Stylus input is accepted
   final bool stylusOnlyPalmRejection;
 
-  /// Active stroke currently being drawn (real-time preview in both panes)
+  /// Active stroke when drawing directly on the top full page (when pad mode is off)
   final StrokeModel? activeStroke;
 
-  /// Whether the current stroke entered the right-side auto-advance zone
-  final bool enteredAutoAdvanceZone;
-
-  /// Undo / Redo stacks of stroke lists for the current page
-  final List<List<StrokeModel>> undoStack;
-  final List<List<StrokeModel>> redoStack;
+  /// Undo / Redo stacks (including cursor position)
+  final List<UndoSnapshot> undoStack;
+  final List<UndoSnapshot> redoStack;
 
   const CanvasState({
     required this.notebook,
@@ -47,15 +79,13 @@ class CanvasState {
     this.highlighterWidth = 14.0,
     this.eraserRadius = 18.0,
     this.isZoomMode = true,
-    this.zoomBoxRect = const Rect.fromLTWH(
-      CanvasConstants.pageHorizontalMargin,
-      CanvasConstants.pageTopMargin,
-      CanvasConstants.defaultZoomBoxWidth,
-      CanvasConstants.defaultZoomBoxHeight,
-    ),
+    this.autoCommitPad = true,
+    this.cursorLineIndex = 1,
+    this.cursorX = CanvasConstants.leftWritingMargin,
+    this.padStrokes = const [],
+    this.activePadStroke,
     this.stylusOnlyPalmRejection = false,
     this.activeStroke,
-    this.enteredAutoAdvanceZone = false,
     this.undoStack = const [],
     this.redoStack = const [],
   });
@@ -64,6 +94,114 @@ class CanvasState {
 
   bool get canUndo => undoStack.isNotEmpty;
   bool get canRedo => redoStack.isNotEmpty;
+  bool get hasUncommittedPadInk =>
+      padStrokes.isNotEmpty || activePadStroke != null;
+
+  /// Y coordinate of the baseline of the current ruled row
+  double get currentLineBaselineY =>
+      CanvasConstants.pageTopMargin +
+      (cursorLineIndex * CanvasConstants.defaultLineSpacing);
+
+  /// Top Y coordinate of the current ruled row
+  double get currentLineTopY =>
+      currentLineBaselineY - CanvasConstants.defaultLineSpacing;
+
+  /// Computes how the current pad strokes will be scaled and positioned on the active worksheet line
+  NormalizedPadResult? computeNormalizedPadPreview() {
+    final allPadStrokes = [
+      ...padStrokes,
+      if (activePadStroke != null) activePadStroke!,
+    ];
+    if (allPadStrokes.isEmpty) return null;
+
+    double minX = double.infinity;
+    double minY = double.infinity;
+    double maxX = double.negativeInfinity;
+    double maxY = double.negativeInfinity;
+    int pointCount = 0;
+
+    for (final s in allPadStrokes) {
+      for (final p in s.points) {
+        minX = math.min(minX, p.x);
+        minY = math.min(minY, p.y);
+        maxX = math.max(maxX, p.x);
+        maxY = math.max(maxY, p.y);
+        pointCount++;
+      }
+    }
+
+    if (pointCount == 0) return null;
+
+    final rawWidth = math.max(1.0, maxX - minX);
+    final rawHeight = math.max(1.0, maxY - minY);
+
+    // Determine scale so that no matter how big or small the user writes in the pad,
+    // the resulting handwriting fits neatly inside one ruled line height (23px inside 32px row).
+    const targetHeight = CanvasConstants.targetLineFitHeight;
+    double scale;
+    if (rawHeight < 32.0 && rawWidth < 32.0) {
+      // Small punctuation mark (dot, comma, dash): keep proportional without blowing up huge
+      scale = targetHeight / 64.0;
+    } else {
+      scale = targetHeight / rawHeight;
+    }
+
+    // Ensure a very wide phrase doesn't exceed a full line width
+    const maxLineWidth = CanvasConstants.pageWidth -
+        CanvasConstants.leftWritingMargin -
+        CanvasConstants.rightWritingMargin;
+    if (rawWidth * scale > maxLineWidth) {
+      scale = maxLineWidth / rawWidth;
+    }
+
+    final scaledWidth = rawWidth * scale;
+    final scaledHeight = rawHeight * scale;
+
+    // Check if we need to wrap to the next ruled line
+    int targetLine = cursorLineIndex;
+    double targetX = cursorX;
+    if (targetX + scaledWidth >
+            CanvasConstants.pageWidth - CanvasConstants.rightWritingMargin &&
+        targetX > CanvasConstants.leftWritingMargin + 8.0) {
+      targetLine = math.min(cursorLineIndex + 1, CanvasConstants.maxLineCount);
+      targetX = CanvasConstants.leftWritingMargin;
+    }
+
+    final lineBottomY = CanvasConstants.pageTopMargin +
+        (targetLine * CanvasConstants.defaultLineSpacing);
+    final lineTopY = lineBottomY - CanvasConstants.defaultLineSpacing;
+
+    // Center vertically inside the ruled line with a slight baseline bias
+    final verticalOffset =
+        lineTopY + (CanvasConstants.defaultLineSpacing - scaledHeight) / 2.0;
+
+    final transformedStrokes = allPadStrokes.map((stroke) {
+      final newPoints = stroke.points.map((p) {
+        return StrokePoint(
+          x: targetX + (p.x - minX) * scale,
+          y: verticalOffset + (p.y - minY) * scale,
+          pressure: p.pressure,
+        );
+      }).toList();
+
+      // Normalize stroke thickness so scaled handwriting looks crisp on the worksheet
+      final normalizedWidth = stroke.toolType == DrawingToolType.highlighter
+          ? 12.0
+          : (stroke.strokeWidth * 0.68).clamp(1.6, 4.2);
+
+      return stroke.copyWith(
+        points: newPoints,
+        strokeWidth: normalizedWidth,
+      );
+    }).toList();
+
+    return NormalizedPadResult(
+      placedStrokes: transformedStrokes,
+      scaledWidth: scaledWidth,
+      targetCursorX: targetX,
+      targetLineIndex: targetLine,
+    );
+  }
 
   CanvasState copyWith({
     NotebookModel? notebook,
@@ -75,13 +213,17 @@ class CanvasState {
     double? highlighterWidth,
     double? eraserRadius,
     bool? isZoomMode,
-    Rect? zoomBoxRect,
+    bool? autoCommitPad,
+    int? cursorLineIndex,
+    double? cursorX,
+    List<StrokeModel>? padStrokes,
+    StrokeModel? activePadStroke,
+    bool clearActivePadStroke = false,
     bool? stylusOnlyPalmRejection,
     StrokeModel? activeStroke,
     bool clearActiveStroke = false,
-    bool? enteredAutoAdvanceZone,
-    List<List<StrokeModel>>? undoStack,
-    List<List<StrokeModel>>? redoStack,
+    List<UndoSnapshot>? undoStack,
+    List<UndoSnapshot>? redoStack,
   }) {
     return CanvasState(
       notebook: notebook ?? this.notebook,
@@ -93,13 +235,17 @@ class CanvasState {
       highlighterWidth: highlighterWidth ?? this.highlighterWidth,
       eraserRadius: eraserRadius ?? this.eraserRadius,
       isZoomMode: isZoomMode ?? this.isZoomMode,
-      zoomBoxRect: zoomBoxRect ?? this.zoomBoxRect,
+      autoCommitPad: autoCommitPad ?? this.autoCommitPad,
+      cursorLineIndex: cursorLineIndex ?? this.cursorLineIndex,
+      cursorX: cursorX ?? this.cursorX,
+      padStrokes: padStrokes ?? this.padStrokes,
+      activePadStroke: clearActivePadStroke
+          ? null
+          : (activePadStroke ?? this.activePadStroke),
       stylusOnlyPalmRejection:
           stylusOnlyPalmRejection ?? this.stylusOnlyPalmRejection,
       activeStroke:
           clearActiveStroke ? null : (activeStroke ?? this.activeStroke),
-      enteredAutoAdvanceZone:
-          enteredAutoAdvanceZone ?? this.enteredAutoAdvanceZone,
       undoStack: undoStack ?? this.undoStack,
       redoStack: redoStack ?? this.redoStack,
     );
@@ -140,7 +286,14 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
   }
 
   void toggleZoomMode() {
+    if (state.hasUncommittedPadInk) {
+      commitPadStrokesToLine();
+    }
     state = state.copyWith(isZoomMode: !state.isZoomMode);
+  }
+
+  void toggleAutoCommitPad() {
+    state = state.copyWith(autoCommitPad: !state.autoCommitPad);
   }
 
   void toggleStylusOnlyMode() {
@@ -154,64 +307,160 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
     _updateCurrentPage(updatedPage);
   }
 
-  // ---------------- ZOOM BOX NAVIGATION ----------------
+  // ---------------- WORKSHEET LINE CURSOR NAVIGATION ----------------
 
-  void moveZoomBoxTo(Offset newTopLeft) {
-    final maxX = CanvasConstants.pageWidth - state.zoomBoxRect.width;
-    final maxY = CanvasConstants.pageHeight - state.zoomBoxRect.height;
-    final clampedX = newTopLeft.dx.clamp(0.0, maxX);
-    final clampedY = newTopLeft.dy.clamp(0.0, maxY);
-
-    state = state.copyWith(
-      zoomBoxRect: Rect.fromLTWH(
-        clampedX,
-        clampedY,
-        state.zoomBoxRect.width,
-        state.zoomBoxRect.height,
-      ),
-    );
-  }
-
-  void advanceZoomBox() {
-    final currentRect = state.zoomBoxRect;
-    final stepX =
-        currentRect.width * CanvasConstants.autoAdvanceStepFraction;
-    double nextX = currentRect.left + stepX;
-    double nextY = currentRect.top;
-
-    final maxX = CanvasConstants.pageWidth -
-        currentRect.width -
-        CanvasConstants.pageHorizontalMargin / 2;
-
-    if (nextX > maxX) {
-      // Wrap to next line on the left margin!
-      nextX = CanvasConstants.pageHorizontalMargin;
-      nextY = (currentRect.top + CanvasConstants.defaultLineSpacing * 2).clamp(
-        CanvasConstants.pageTopMargin / 2,
-        CanvasConstants.pageHeight - currentRect.height - 16,
-      );
+  /// Moves the writing cursor to wherever the user tapped on the worksheet
+  Future<void> setCursorFromPageTap(Offset pagePoint) async {
+    if (state.hasUncommittedPadInk) {
+      await commitPadStrokesToLine();
     }
 
-    moveZoomBoxTo(Offset(nextX, nextY));
-  }
+    // Calculate nearest ruled line index
+    final rawIndex = ((pagePoint.dy -
+                (CanvasConstants.pageTopMargin -
+                    CanvasConstants.defaultLineSpacing)) /
+            CanvasConstants.defaultLineSpacing)
+        .floor();
+    final lineIndex = rawIndex.clamp(1, CanvasConstants.maxLineCount);
 
-  void newlineZoomBox() {
-    final currentRect = state.zoomBoxRect;
-    final nextY = (currentRect.top + CanvasConstants.defaultLineSpacing * 2)
-        .clamp(
-      CanvasConstants.pageTopMargin / 2,
-      CanvasConstants.pageHeight - currentRect.height - 16,
+    final clampedX = pagePoint.dx.clamp(
+      CanvasConstants.leftWritingMargin,
+      CanvasConstants.pageWidth - CanvasConstants.rightWritingMargin - 20.0,
     );
-    moveZoomBoxTo(Offset(CanvasConstants.pageHorizontalMargin, nextY));
+
+    state = state.copyWith(
+      cursorLineIndex: lineIndex,
+      cursorX: clampedX,
+    );
   }
 
-  // ---------------- DRAWING & ERASING ----------------
+  Future<void> insertSpace() async {
+    if (state.hasUncommittedPadInk) {
+      await commitPadStrokesToLine();
+      return;
+    }
 
-  void startStroke(
-    Offset pagePoint, {
-    double pressure = 0.5,
-    bool inAutoAdvanceZone = false,
-  }) {
+    double nextX = state.cursorX + CanvasConstants.spaceAdvance;
+    int nextLine = state.cursorLineIndex;
+    if (nextX >
+        CanvasConstants.pageWidth - CanvasConstants.rightWritingMargin) {
+      nextX = CanvasConstants.leftWritingMargin;
+      nextLine = math.min(nextLine + 1, CanvasConstants.maxLineCount);
+    }
+
+    state = state.copyWith(cursorX: nextX, cursorLineIndex: nextLine);
+  }
+
+  Future<void> insertNewline() async {
+    if (state.hasUncommittedPadInk) {
+      await commitPadStrokesToLine();
+    }
+    final nextLine =
+        math.min(state.cursorLineIndex + 1, CanvasConstants.maxLineCount);
+    state = state.copyWith(
+      cursorLineIndex: nextLine,
+      cursorX: CanvasConstants.leftWritingMargin,
+    );
+  }
+
+  void clearPadStrokes() {
+    state = state.copyWith(
+      padStrokes: const [],
+      clearActivePadStroke: true,
+    );
+  }
+
+  // ---------------- BOTTOM HANDWRITING PAD DRAWING ----------------
+
+  void startPadStroke(Offset padPoint, {double pressure = 0.5}) {
+    final color = state.activeTool == DrawingToolType.highlighter
+        ? state.highlighterColor.toARGB32()
+        : state.penColor.toARGB32();
+    final width = state.activeTool == DrawingToolType.highlighter
+        ? state.highlighterWidth
+        : state.penWidth;
+
+    final stroke = StrokeModel(
+      points: [
+        StrokePoint(x: padPoint.dx, y: padPoint.dy, pressure: pressure),
+      ],
+      colorValue: color,
+      strokeWidth: width,
+      toolType: state.activeTool == DrawingToolType.eraser
+          ? DrawingToolType.pen
+          : state.activeTool,
+    );
+
+    state = state.copyWith(activePadStroke: stroke);
+  }
+
+  void appendPadStrokePoint(Offset padPoint, {double pressure = 0.5}) {
+    final current = state.activePadStroke;
+    if (current == null) return;
+
+    final updatedPoints = [
+      ...current.points,
+      StrokePoint(x: padPoint.dx, y: padPoint.dy, pressure: pressure),
+    ];
+
+    state = state.copyWith(
+      activePadStroke: current.copyWith(points: updatedPoints),
+    );
+  }
+
+  void endPadStroke() {
+    final current = state.activePadStroke;
+    if (current == null || current.points.isEmpty) {
+      state = state.copyWith(clearActivePadStroke: true);
+      return;
+    }
+
+    state = state.copyWith(
+      padStrokes: [...state.padStrokes, current],
+      clearActivePadStroke: true,
+    );
+  }
+
+  /// Takes whatever was handwritten in the bottom pad, scales it to fit the line height,
+  /// places it at the current cursor position on the worksheet, advances the cursor, and clears the pad!
+  Future<void> commitPadStrokesToLine() async {
+    final normalized = state.computeNormalizedPadPreview();
+    if (normalized == null || normalized.placedStrokes.isEmpty) {
+      clearPadStrokes();
+      return;
+    }
+
+    _pushUndoSnapshot();
+
+    final updatedStrokes = [
+      ...state.currentPage.strokes,
+      ...normalized.placedStrokes,
+    ];
+    final updatedPage = state.currentPage.copyWith(strokes: updatedStrokes);
+
+    double nextCursorX =
+        normalized.targetCursorX + normalized.scaledWidth + CanvasConstants.wordGap;
+    int nextLineIndex = normalized.targetLineIndex;
+
+    if (nextCursorX >
+        CanvasConstants.pageWidth - CanvasConstants.rightWritingMargin) {
+      nextCursorX = CanvasConstants.leftWritingMargin;
+      nextLineIndex = math.min(nextLineIndex + 1, CanvasConstants.maxLineCount);
+    }
+
+    state = state.copyWith(
+      padStrokes: const [],
+      clearActivePadStroke: true,
+      cursorX: nextCursorX,
+      cursorLineIndex: nextLineIndex,
+    );
+
+    await _updateCurrentPage(updatedPage);
+  }
+
+  // ---------------- DIRECT PAGE DRAWING & ERASING ----------------
+
+  void startStroke(Offset pagePoint, {double pressure = 0.5}) {
     if (state.activeTool == DrawingToolType.eraser) {
       _pushUndoSnapshot();
       _eraseAt(pagePoint);
@@ -234,17 +483,10 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
       toolType: state.activeTool,
     );
 
-    state = state.copyWith(
-      activeStroke: stroke,
-      enteredAutoAdvanceZone: inAutoAdvanceZone,
-    );
+    state = state.copyWith(activeStroke: stroke);
   }
 
-  void appendStrokePoint(
-    Offset pagePoint, {
-    double pressure = 0.5,
-    bool inAutoAdvanceZone = false,
-  }) {
+  void appendStrokePoint(Offset pagePoint, {double pressure = 0.5}) {
     if (state.activeTool == DrawingToolType.eraser) {
       _eraseAt(pagePoint);
       return;
@@ -260,8 +502,6 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
 
     state = state.copyWith(
       activeStroke: current.copyWith(points: updatedPoints),
-      enteredAutoAdvanceZone:
-          state.enteredAutoAdvanceZone || inAutoAdvanceZone,
     );
   }
 
@@ -273,29 +513,17 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
 
     final finishedStroke = state.activeStroke;
     if (finishedStroke == null || finishedStroke.points.isEmpty) {
-      state = state.copyWith(
-        clearActiveStroke: true,
-        enteredAutoAdvanceZone: false,
-      );
+      state = state.copyWith(clearActiveStroke: true);
       return;
     }
 
-    final shouldAutoAdvance = state.enteredAutoAdvanceZone;
     _pushUndoSnapshot();
 
     final updatedStrokes = [...state.currentPage.strokes, finishedStroke];
     final updatedPage = state.currentPage.copyWith(strokes: updatedStrokes);
 
-    state = state.copyWith(
-      clearActiveStroke: true,
-      enteredAutoAdvanceZone: false,
-    );
-
+    state = state.copyWith(clearActiveStroke: true);
     await _updateCurrentPage(updatedPage);
-
-    if (shouldAutoAdvance) {
-      advanceZoomBox();
-    }
   }
 
   void _eraseAt(Offset pagePoint) {
@@ -305,7 +533,7 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
         final dx = p.x - pagePoint.dx;
         final dy = p.y - pagePoint.dy;
         if (dx * dx + dy * dy <= radiusSq) {
-          return false; // Hit by eraser
+          return false;
         }
       }
       return true;
@@ -317,35 +545,65 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
     }
   }
 
-  // ---------------- UNDO / REDO ----------------
+  // ---------------- UNDO / REDO / BACKSPACE ----------------
 
   void _pushUndoSnapshot() {
-    final nextUndo = [...state.undoStack, state.currentPage.strokes];
-    if (nextUndo.length > 40) {
+    final snapshot = UndoSnapshot(
+      strokes: state.currentPage.strokes,
+      cursorX: state.cursorX,
+      cursorLineIndex: state.cursorLineIndex,
+    );
+    final nextUndo = [...state.undoStack, snapshot];
+    if (nextUndo.length > 50) {
       nextUndo.removeAt(0);
     }
     state = state.copyWith(undoStack: nextUndo, redoStack: []);
   }
 
   Future<void> undo() async {
+    if (state.hasUncommittedPadInk) {
+      clearPadStrokes();
+      return;
+    }
     if (!state.canUndo) return;
-    final nextUndo = [...state.undoStack];
-    final previousStrokes = nextUndo.removeLast();
-    final nextRedo = [...state.redoStack, state.currentPage.strokes];
 
-    state = state.copyWith(undoStack: nextUndo, redoStack: nextRedo);
-    final updatedPage = state.currentPage.copyWith(strokes: previousStrokes);
+    final nextUndo = [...state.undoStack];
+    final previous = nextUndo.removeLast();
+    final currentSnapshot = UndoSnapshot(
+      strokes: state.currentPage.strokes,
+      cursorX: state.cursorX,
+      cursorLineIndex: state.cursorLineIndex,
+    );
+    final nextRedo = [...state.redoStack, currentSnapshot];
+
+    state = state.copyWith(
+      undoStack: nextUndo,
+      redoStack: nextRedo,
+      cursorX: previous.cursorX,
+      cursorLineIndex: previous.cursorLineIndex,
+    );
+    final updatedPage = state.currentPage.copyWith(strokes: previous.strokes);
     await _updateCurrentPage(updatedPage);
   }
 
   Future<void> redo() async {
     if (!state.canRedo) return;
     final nextRedo = [...state.redoStack];
-    final restoredStrokes = nextRedo.removeLast();
-    final nextUndo = [...state.undoStack, state.currentPage.strokes];
+    final restored = nextRedo.removeLast();
+    final currentSnapshot = UndoSnapshot(
+      strokes: state.currentPage.strokes,
+      cursorX: state.cursorX,
+      cursorLineIndex: state.cursorLineIndex,
+    );
+    final nextUndo = [...state.undoStack, currentSnapshot];
 
-    state = state.copyWith(undoStack: nextUndo, redoStack: nextRedo);
-    final updatedPage = state.currentPage.copyWith(strokes: restoredStrokes);
+    state = state.copyWith(
+      undoStack: nextUndo,
+      redoStack: nextRedo,
+      cursorX: restored.cursorX,
+      cursorLineIndex: restored.cursorLineIndex,
+    );
+    final updatedPage = state.currentPage.copyWith(strokes: restored.strokes);
     await _updateCurrentPage(updatedPage);
   }
 
@@ -387,6 +645,9 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
   // ---------------- MULTI-PAGE MANAGEMENT ----------------
 
   Future<void> addNewPage() async {
+    if (state.hasUncommittedPadInk) {
+      await commitPadStrokesToLine();
+    }
     final newPage = NotePageModel(
       id: _uuid.v4(),
       backgroundStyle: state.currentPage.backgroundStyle,
@@ -399,16 +660,23 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
     state = state.copyWith(
       notebook: updatedNotebook,
       currentPageIndex: updatedPages.length - 1,
+      cursorLineIndex: 1,
+      cursorX: CanvasConstants.leftWritingMargin,
       undoStack: [],
       redoStack: [],
     );
     await _persistNotebook();
   }
 
-  void switchPage(int index) {
+  Future<void> switchPage(int index) async {
     if (index < 0 || index >= state.notebook.pages.length) return;
+    if (state.hasUncommittedPadInk) {
+      await commitPadStrokesToLine();
+    }
     state = state.copyWith(
       currentPageIndex: index,
+      cursorLineIndex: 1,
+      cursorX: CanvasConstants.leftWritingMargin,
       undoStack: [],
       redoStack: [],
     );
