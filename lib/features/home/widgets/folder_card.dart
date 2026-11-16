@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../models/folder_model.dart';
 
@@ -61,7 +60,7 @@ class FolderCard extends StatelessWidget {
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Icon(
-                    LucideIcons.folder,
+                    Icons.folder_rounded,
                     color: folderColor,
                     size: 20,
                   ),
@@ -72,8 +71,8 @@ class FolderCard extends StatelessWidget {
                   child: const Padding(
                     padding: EdgeInsets.all(4.0),
                     child: Icon(
-                      LucideIcons.trash2,
-                      size: 15,
+                      Icons.delete_outline_rounded,
+                      size: 16,
                       color: AppColors.textSecondary,
                     ),
                   ),

@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/canvas_constants.dart';
 import '../../../providers/canvas_provider.dart';
@@ -77,7 +76,7 @@ class _ZoomWritingPadState extends State<ZoomWritingPad> {
             child: Row(
               children: [
                 const Icon(
-                  LucideIcons.scanSearch,
+                  Icons.zoom_in_map_rounded,
                   size: 16,
                   color: AppColors.primary,
                 ),
@@ -93,7 +92,7 @@ class _ZoomWritingPadState extends State<ZoomWritingPad> {
                 const Spacer(),
                 // Manual Zoom Box Controls (Left, Right, Newline)
                 _SmallNavButton(
-                  icon: LucideIcons.arrowLeft,
+                  icon: Icons.arrow_back_rounded,
                   tooltip: 'រំកិលទៅឆ្វេង',
                   onTap: () => widget.notifier.moveZoomBoxTo(
                     zoomRect.topLeft - const Offset(80, 0),
@@ -101,13 +100,13 @@ class _ZoomWritingPadState extends State<ZoomWritingPad> {
                 ),
                 const SizedBox(width: 6),
                 _SmallNavButton(
-                  icon: LucideIcons.arrowRight,
+                  icon: Icons.arrow_forward_rounded,
                   tooltip: 'រំកិលទៅស្តាំ (Advance)',
                   onTap: widget.notifier.advanceZoomBox,
                 ),
                 const SizedBox(width: 6),
                 _SmallNavButton(
-                  icon: LucideIcons.cornerDownLeft,
+                  icon: Icons.keyboard_return_rounded,
                   tooltip: 'ចុះបន្ទាត់ថ្មី (New Line)',
                   onTap: widget.notifier.newlineZoomBox,
                 ),

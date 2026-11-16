@@ -3,7 +3,6 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/constants/canvas_constants.dart';
 import '../../core/utils/export_helper.dart';
@@ -90,7 +89,7 @@ class _WorkspaceScreenState extends ConsumerState<WorkspaceScreen> {
             onPressed: state.currentPageIndex > 0
                 ? () => notifier.switchPage(state.currentPageIndex - 1)
                 : null,
-            icon: const Icon(LucideIcons.chevronLeft, size: 20),
+            icon: const Icon(Icons.chevron_left_rounded, size: 22),
           ),
           // Next Page
           IconButton(
@@ -98,13 +97,13 @@ class _WorkspaceScreenState extends ConsumerState<WorkspaceScreen> {
             onPressed: state.currentPageIndex < state.notebook.pages.length - 1
                 ? () => notifier.switchPage(state.currentPageIndex + 1)
                 : null,
-            icon: const Icon(LucideIcons.chevronRight, size: 20),
+            icon: const Icon(Icons.chevron_right_rounded, size: 22),
           ),
           // Add New Page
           IconButton(
             tooltip: 'បន្ថែមទំព័រថ្មី',
             onPressed: notifier.addNewPage,
-            icon: const Icon(LucideIcons.filePlus2, size: 20),
+            icon: const Icon(Icons.note_add_outlined, size: 20),
           ),
           const SizedBox(width: 4),
         ],

@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../models/note_page_model.dart';
 import '../../../models/stroke_model.dart';
@@ -39,19 +38,19 @@ class TopToolbar extends StatelessWidget {
             IconButton(
               tooltip: 'Undo',
               onPressed: state.canUndo ? notifier.undo : null,
-              icon: const Icon(LucideIcons.undo2, size: 20),
+              icon: const Icon(Icons.undo_rounded, size: 20),
             ),
             IconButton(
               tooltip: 'Redo',
               onPressed: state.canRedo ? notifier.redo : null,
-              icon: const Icon(LucideIcons.redo2, size: 20),
+              icon: const Icon(Icons.redo_rounded, size: 20),
             ),
             const SizedBox(width: 4),
             _buildDivider(),
 
             // Pen Tool + Color/Size popover
             _ToolButton(
-              icon: LucideIcons.penTool,
+              icon: Icons.edit_rounded,
               label: 'ប៊ិច',
               colorIndicator: state.penColor,
               isSelected: state.activeTool == DrawingToolType.pen,
@@ -68,7 +67,7 @@ class TopToolbar extends StatelessWidget {
 
             // Highlighter Tool
             _ToolButton(
-              icon: LucideIcons.highlighter,
+              icon: Icons.border_color_rounded,
               label: 'ហាយឡាយ',
               colorIndicator: state.highlighterColor,
               isSelected: state.activeTool == DrawingToolType.highlighter,
@@ -85,7 +84,7 @@ class TopToolbar extends StatelessWidget {
 
             // Eraser Tool
             _ToolButton(
-              icon: LucideIcons.eraser,
+              icon: Icons.cleaning_services_outlined,
               label: 'ជ័រលុប',
               isSelected: state.activeTool == DrawingToolType.eraser,
               onTap: () => notifier.selectTool(DrawingToolType.eraser),
@@ -99,7 +98,7 @@ class TopToolbar extends StatelessWidget {
               selected: state.isZoomMode,
               onSelected: (_) => notifier.toggleZoomMode(),
               avatar: Icon(
-                LucideIcons.zoomIn,
+                Icons.zoom_in_rounded,
                 size: 16,
                 color: state.isZoomMode
                     ? AppColors.primary
@@ -119,7 +118,7 @@ class TopToolbar extends StatelessWidget {
               selected: state.stylusOnlyPalmRejection,
               onSelected: (_) => notifier.toggleStylusOnlyMode(),
               avatar: Icon(
-                LucideIcons.hand,
+                Icons.front_hand_outlined,
                 size: 16,
                 color: state.stylusOnlyPalmRejection
                     ? Colors.teal.shade700
@@ -140,7 +139,7 @@ class TopToolbar extends StatelessWidget {
             // Paper Background Style Picker
             PopupMenuButton<PaperBackgroundStyle>(
               tooltip: 'ប្តូរប្រភេទក្រដាស',
-              icon: const Icon(LucideIcons.fileText, size: 20),
+              icon: const Icon(Icons.description_outlined, size: 20),
               onSelected: notifier.setPaperBackgroundStyle,
               itemBuilder: (context) => [
                 const PopupMenuItem(
@@ -162,13 +161,13 @@ class TopToolbar extends StatelessWidget {
             IconButton(
               tooltip: 'បញ្ចូលរូបភាព (Insert Image)',
               onPressed: onInsertImage,
-              icon: const Icon(LucideIcons.imagePlus, size: 20),
+              icon: const Icon(Icons.add_photo_alternate_outlined, size: 20),
             ),
 
             // Export Menu (PDF / PNG)
             PopupMenuButton<String>(
               tooltip: 'Export ឯកសារ',
-              icon: const Icon(LucideIcons.download, size: 20),
+              icon: const Icon(Icons.download_rounded, size: 20),
               onSelected: (value) {
                 if (value == 'pdf') onExportPdf();
                 if (value == 'png') onExportPng();
@@ -178,7 +177,7 @@ class TopToolbar extends StatelessWidget {
                   value: 'pdf',
                   child: Row(
                     children: [
-                      Icon(LucideIcons.fileText, size: 18),
+                      Icon(Icons.picture_as_pdf_outlined, size: 18),
                       SizedBox(width: 8),
                       Text('Export ជា PDF'),
                     ],
@@ -188,7 +187,7 @@ class TopToolbar extends StatelessWidget {
                   value: 'png',
                   child: Row(
                     children: [
-                      Icon(LucideIcons.image, size: 18),
+                      Icon(Icons.image_outlined, size: 18),
                       SizedBox(width: 8),
                       Text('Export ជារូបភាព (PNG)'),
                     ],

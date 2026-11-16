@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/canvas_constants.dart';
 import '../../../models/notebook_model.dart';
@@ -137,8 +136,8 @@ class NotebookCard extends StatelessWidget {
                           Row(
                             children: [
                               Icon(
-                                LucideIcons.folder,
-                                size: 11,
+                                Icons.folder_rounded,
+                                size: 12,
                                 color: coverColor,
                               ),
                               const SizedBox(width: 4),
@@ -171,7 +170,7 @@ class NotebookCard extends StatelessWidget {
                   ),
                   PopupMenuButton<String>(
                     icon: const Icon(
-                      LucideIcons.ellipsisVertical,
+                      Icons.more_vert_rounded,
                       size: 18,
                       color: AppColors.textSecondary,
                     ),
@@ -184,7 +183,7 @@ class NotebookCard extends StatelessWidget {
                         value: 'delete',
                         child: Row(
                           children: [
-                            Icon(LucideIcons.trash2, size: 16, color: Colors.red),
+                            Icon(Icons.delete_outline_rounded, size: 16, color: Colors.red),
                             SizedBox(width: 8),
                             Text('លុបសៀវភៅ', style: TextStyle(color: Colors.red)),
                           ],

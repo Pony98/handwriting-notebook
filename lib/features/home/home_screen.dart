@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../core/constants/app_colors.dart';
 import '../../models/notebook_model.dart';
 import '../../providers/folder_provider.dart';
@@ -27,7 +26,7 @@ class HomeScreen extends ConsumerWidget {
         elevation: 0,
         title: const Row(
           children: [
-            Icon(LucideIcons.penTool, color: AppColors.primary, size: 22),
+            Icon(Icons.draw_rounded, color: AppColors.primary, size: 22),
             SizedBox(width: 10),
             Text(
               'សៀវភៅកត់ត្រាដៃ (Smart Notes)',
@@ -42,7 +41,7 @@ class HomeScreen extends ConsumerWidget {
         actions: [
           TextButton.icon(
             onPressed: () => _showCreateFolderDialog(context, ref),
-            icon: const Icon(LucideIcons.folderPlus, size: 18),
+            icon: const Icon(Icons.create_new_folder_outlined, size: 18),
             label: const Text('បង្កើត Folder'),
           ),
           const SizedBox(width: 8),
@@ -161,7 +160,7 @@ class HomeScreen extends ConsumerWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(
-                      LucideIcons.bookOpen,
+                      Icons.menu_book_rounded,
                       size: 52,
                       color: AppColors.textSecondary.withValues(alpha: 0.4),
                     ),
@@ -222,7 +221,7 @@ class HomeScreen extends ConsumerWidget {
         onPressed: () => _showCreateNotebookDialog(context, ref),
         backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
-        icon: const Icon(LucideIcons.plus),
+        icon: const Icon(Icons.add_rounded),
         label: const Text(
           'សន្លឹកកិច្ចការថ្មី',
           style: TextStyle(fontWeight: FontWeight.w700),
