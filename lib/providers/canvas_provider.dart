@@ -37,6 +37,50 @@ class NormalizedPadResult {
   });
 }
 
+class _StrokeCluster {
+  final List<StrokeModel> strokes;
+  double minX;
+  double minY;
+  double maxX;
+  double maxY;
+
+  _StrokeCluster({
+    required this.strokes,
+    required this.minX,
+    required this.minY,
+    required this.maxX,
+    required this.maxY,
+  });
+
+  double get width => math.max(1.0, maxX - minX);
+  double get height => math.max(1.0, maxY - minY);
+  double get centerX => (minX + maxX) / 2.0;
+
+  bool overlapsHorizontally(_StrokeCluster other) {
+    final overlapStart = math.max(minX, other.minX);
+    final overlapEnd = math.min(maxX, other.maxX);
+    final overlap = overlapEnd - overlapStart;
+    final minWidth = math.min(width, other.width);
+
+    // Connected or vertically stacked parts of the same character (e.g. Khmer vowel/subscript or crossed strokes)
+    if (overlap >= -6.0 &&
+        (overlap >= minWidth * 0.22 ||
+            (other.centerX >= minX - 8.0 && other.centerX <= maxX + 8.0) ||
+            (centerX >= other.minX - 8.0 && centerX <= other.maxX + 8.0))) {
+      return true;
+    }
+    return false;
+  }
+
+  void merge(_StrokeCluster other) {
+    strokes.addAll(other.strokes);
+    minX = math.min(minX, other.minX);
+    minY = math.min(minY, other.minY);
+    maxX = math.max(maxX, other.maxX);
+    maxY = math.max(maxY, other.maxY);
+  }
+}
+
 class CanvasState {
   final NotebookModel notebook;
   final int currentPageIndex;
@@ -106,7 +150,9 @@ class CanvasState {
   double get currentLineTopY =>
       currentLineBaselineY - CanvasConstants.defaultLineSpacing;
 
-  /// Computes how the current pad strokes will be scaled and positioned on the active worksheet line
+  /// Groups pad strokes into individual character clusters, scales each character to uniform height,
+  /// enforces 100% uniform horizontal spacing (`uniformCharGap`) between every character,
+  /// and applies 100% uniform stroke thickness (`normalizedStrokeWidth`).
   NormalizedPadResult? computeNormalizedPadPreview() {
     final allPadStrokes = [
       ...padStrokes,
@@ -114,91 +160,140 @@ class CanvasState {
     ];
     if (allPadStrokes.isEmpty) return null;
 
-    double minX = double.infinity;
-    double minY = double.infinity;
-    double maxX = double.negativeInfinity;
-    double maxY = double.negativeInfinity;
-    int pointCount = 0;
-
+    // 1. Build initial bounding box for each stroke
+    final List<_StrokeCluster> clusters = [];
     for (final s in allPadStrokes) {
+      if (s.points.isEmpty) continue;
+      double sMinX = double.infinity;
+      double sMinY = double.infinity;
+      double sMaxX = double.negativeInfinity;
+      double sMaxY = double.negativeInfinity;
       for (final p in s.points) {
-        minX = math.min(minX, p.x);
-        minY = math.min(minY, p.y);
-        maxX = math.max(maxX, p.x);
-        maxY = math.max(maxY, p.y);
-        pointCount++;
+        sMinX = math.min(sMinX, p.x);
+        sMinY = math.min(sMinY, p.y);
+        sMaxX = math.max(sMaxX, p.x);
+        sMaxY = math.max(sMaxY, p.y);
+      }
+      clusters.add(
+        _StrokeCluster(
+          strokes: [s],
+          minX: sMinX,
+          minY: sMinY,
+          maxX: sMaxX,
+          maxY: sMaxY,
+        ),
+      );
+    }
+
+    if (clusters.isEmpty) return null;
+
+    // 2. Sort clusters left-to-right and merge strokes belonging to the same character
+    clusters.sort((a, b) => a.minX.compareTo(b.minX));
+    final List<_StrokeCluster> mergedClusters = [];
+    for (final c in clusters) {
+      if (mergedClusters.isEmpty) {
+        mergedClusters.add(c);
+      } else {
+        final prev = mergedClusters.last;
+        if (prev.overlapsHorizontally(c)) {
+          prev.merge(c);
+        } else {
+          mergedClusters.add(c);
+        }
       }
     }
 
-    if (pointCount == 0) return null;
-
-    final rawWidth = math.max(1.0, maxX - minX);
-    final rawHeight = math.max(1.0, maxY - minY);
-
-    // Determine scale so that no matter how big or small the user writes in the pad,
-    // the resulting handwriting fits neatly inside one ruled line height (23px inside 32px row).
+    // 3. Calculate uniform scale and total width with equal spacing between every character cluster
     const targetHeight = CanvasConstants.targetLineFitHeight;
-    double scale;
-    if (rawHeight < 32.0 && rawWidth < 32.0) {
-      // Small punctuation mark (dot, comma, dash): keep proportional without blowing up huge
-      scale = targetHeight / 64.0;
-    } else {
-      scale = targetHeight / rawHeight;
+    const charGap = CanvasConstants.uniformCharGap;
+    final double uniformPenStrokeWidth =
+        (penWidth * 0.62).clamp(1.8, 3.6);
+
+    final List<double> clusterScales = [];
+    double totalWidth = 0.0;
+
+    for (int i = 0; i < mergedClusters.length; i++) {
+      final c = mergedClusters[i];
+      double scale;
+      if (c.height < 32.0 && c.width < 32.0) {
+        // Small punctuation mark / dot / dash
+        scale = targetHeight / 64.0;
+      } else {
+        scale = targetHeight / c.height;
+      }
+      clusterScales.add(scale);
+      totalWidth += c.width * scale;
+      if (i < mergedClusters.length - 1) {
+        totalWidth += charGap;
+      }
     }
 
-    // Ensure a very wide phrase doesn't exceed a full line width
+    // Ensure total width never overflows a single full line width
     const maxLineWidth = CanvasConstants.pageWidth -
         CanvasConstants.leftWritingMargin -
         CanvasConstants.rightWritingMargin;
-    if (rawWidth * scale > maxLineWidth) {
-      scale = maxLineWidth / rawWidth;
+    double lineFitFactor = 1.0;
+    if (totalWidth > maxLineWidth && totalWidth > 0) {
+      lineFitFactor = maxLineWidth / totalWidth;
+      totalWidth = maxLineWidth;
     }
 
-    final scaledWidth = rawWidth * scale;
-    final scaledHeight = rawHeight * scale;
-
-    // Check if we need to wrap to the next ruled line
+    // 4. Check if we need to wrap to the next ruled line
     int targetLine = cursorLineIndex;
-    double targetX = cursorX;
-    if (targetX + scaledWidth >
+    double startX = cursorX;
+    if (startX + totalWidth >
             CanvasConstants.pageWidth - CanvasConstants.rightWritingMargin &&
-        targetX > CanvasConstants.leftWritingMargin + 8.0) {
+        startX > CanvasConstants.leftWritingMargin + 8.0) {
       targetLine = math.min(cursorLineIndex + 1, CanvasConstants.maxLineCount);
-      targetX = CanvasConstants.leftWritingMargin;
+      startX = CanvasConstants.leftWritingMargin;
     }
 
     final lineBottomY = CanvasConstants.pageTopMargin +
         (targetLine * CanvasConstants.defaultLineSpacing);
     final lineTopY = lineBottomY - CanvasConstants.defaultLineSpacing;
 
-    // Center vertically inside the ruled line with a slight baseline bias
-    final verticalOffset =
-        lineTopY + (CanvasConstants.defaultLineSpacing - scaledHeight) / 2.0;
+    // 5. Place each character cluster with equal spacing and identical stroke thickness
+    final List<StrokeModel> transformedStrokes = [];
+    double runningX = startX;
 
-    final transformedStrokes = allPadStrokes.map((stroke) {
-      final newPoints = stroke.points.map((p) {
-        return StrokePoint(
-          x: targetX + (p.x - minX) * scale,
-          y: verticalOffset + (p.y - minY) * scale,
-          pressure: p.pressure,
+    for (int i = 0; i < mergedClusters.length; i++) {
+      final c = mergedClusters[i];
+      final scale = clusterScales[i] * lineFitFactor;
+      final scaledClusterWidth = c.width * scale;
+      final scaledClusterHeight = c.height * scale;
+
+      final verticalOffset = lineTopY +
+          (CanvasConstants.defaultLineSpacing - scaledClusterHeight) / 2.0;
+
+      for (final stroke in c.strokes) {
+        final newPoints = stroke.points.map((p) {
+          return StrokePoint(
+            x: runningX + (p.x - c.minX) * scale,
+            y: verticalOffset + (p.y - c.minY) * scale,
+            pressure: 0.5,
+          );
+        }).toList();
+
+        final normalizedWidth =
+            stroke.toolType == DrawingToolType.highlighter
+                ? 12.0
+                : uniformPenStrokeWidth;
+
+        transformedStrokes.add(
+          stroke.copyWith(
+            points: newPoints,
+            strokeWidth: normalizedWidth,
+          ),
         );
-      }).toList();
+      }
 
-      // Normalize stroke thickness so scaled handwriting looks crisp on the worksheet
-      final normalizedWidth = stroke.toolType == DrawingToolType.highlighter
-          ? 12.0
-          : (stroke.strokeWidth * 0.68).clamp(1.6, 4.2);
-
-      return stroke.copyWith(
-        points: newPoints,
-        strokeWidth: normalizedWidth,
-      );
-    }).toList();
+      runningX += scaledClusterWidth + (charGap * lineFitFactor);
+    }
 
     return NormalizedPadResult(
       placedStrokes: transformedStrokes,
-      scaledWidth: scaledWidth,
-      targetCursorX: targetX,
+      scaledWidth: totalWidth,
+      targetCursorX: startX,
       targetLineIndex: targetLine,
     );
   }
@@ -315,7 +410,6 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
       await commitPadStrokesToLine();
     }
 
-    // Calculate nearest ruled line index
     final rawIndex = ((pagePoint.dy -
                 (CanvasConstants.pageTopMargin -
                     CanvasConstants.defaultLineSpacing)) /
@@ -382,7 +476,7 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
 
     final stroke = StrokeModel(
       points: [
-        StrokePoint(x: padPoint.dx, y: padPoint.dy, pressure: pressure),
+        StrokePoint(x: padPoint.dx, y: padPoint.dy, pressure: 0.5),
       ],
       colorValue: color,
       strokeWidth: width,
@@ -400,7 +494,7 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
 
     final updatedPoints = [
       ...current.points,
-      StrokePoint(x: padPoint.dx, y: padPoint.dy, pressure: pressure),
+      StrokePoint(x: padPoint.dx, y: padPoint.dy, pressure: 0.5),
     ];
 
     state = state.copyWith(
@@ -421,8 +515,7 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
     );
   }
 
-  /// Takes whatever was handwritten in the bottom pad, scales it to fit the line height,
-  /// places it at the current cursor position on the worksheet, advances the cursor, and clears the pad!
+  /// Commits normalized pad strokes with uniform thickness and uniform character spacing (`uniformCharGap`)
   Future<void> commitPadStrokesToLine() async {
     final normalized = state.computeNormalizedPadPreview();
     if (normalized == null || normalized.placedStrokes.isEmpty) {
@@ -438,8 +531,9 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
     ];
     final updatedPage = state.currentPage.copyWith(strokes: updatedStrokes);
 
-    double nextCursorX =
-        normalized.targetCursorX + normalized.scaledWidth + CanvasConstants.wordGap;
+    double nextCursorX = normalized.targetCursorX +
+        normalized.scaledWidth +
+        CanvasConstants.uniformCharGap;
     int nextLineIndex = normalized.targetLineIndex;
 
     if (nextCursorX >
@@ -476,7 +570,7 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
 
     final stroke = StrokeModel(
       points: [
-        StrokePoint(x: pagePoint.dx, y: pagePoint.dy, pressure: pressure),
+        StrokePoint(x: pagePoint.dx, y: pagePoint.dy, pressure: 0.5),
       ],
       colorValue: color,
       strokeWidth: width,
@@ -497,7 +591,7 @@ class CanvasNotifier extends FamilyNotifier<CanvasState, NotebookModel> {
 
     final updatedPoints = [
       ...current.points,
-      StrokePoint(x: pagePoint.dx, y: pagePoint.dy, pressure: pressure),
+      StrokePoint(x: pagePoint.dx, y: pagePoint.dy, pressure: 0.5),
     ];
 
     state = state.copyWith(

@@ -34,17 +34,18 @@ class StrokePainter extends CustomPainter {
       ..style = PaintingStyle.fill
       ..blendMode = isHighlighter ? BlendMode.multiply : BlendMode.srcOver;
 
+    // Use uniform pressure (0.5) and thinning: 0.0 so every character has 100% consistent stroke thickness
     final inputPoints = stroke.points
-        .map((p) => PointVector(p.x, p.y, p.pressure))
+        .map((p) => PointVector(p.x, p.y, 0.5))
         .toList();
 
     final outlinePoints = getStroke(
       inputPoints,
       options: StrokeOptions(
-        size: isHighlighter ? stroke.strokeWidth * 2.4 : stroke.strokeWidth,
-        thinning: isHighlighter ? 0.0 : 0.45,
-        smoothing: 0.55,
-        streamline: 0.45,
+        size: isHighlighter ? stroke.strokeWidth * 2.2 : stroke.strokeWidth,
+        thinning: 0.0,
+        smoothing: 0.58,
+        streamline: 0.48,
         simulatePressure: false,
       ),
     );

@@ -16,13 +16,13 @@ class CanvasConstants {
   static const double defaultLineSpacing = 32.0;
 
   /// Target height for scaled handwriting inside a 32px ruled row
-  static const double targetLineFitHeight = 23.0;
+  static const double targetLineFitHeight = 22.0;
 
-  /// Horizontal advance gap after each committed word/group
-  static const double wordGap = 10.0;
+  /// Uniform horizontal spacing between every character/word placed on the line
+  static const double uniformCharGap = 4.8;
 
-  /// Horizontal advance when pressing the Space button
-  static const double spaceAdvance = 24.0;
+  /// Horizontal advance when explicitly pressing the Space button (ដកឃ្លា)
+  static const double spaceAdvance = 18.0;
 
   /// Total number of ruled lines on a page
   static int get maxLineCount =>
