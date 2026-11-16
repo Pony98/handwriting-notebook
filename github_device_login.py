@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import time
 import urllib.parse
@@ -6,11 +7,17 @@ import urllib.request
 import webbrowser
 from auto_deploy_github import create_repo_and_push
 
-# Official GitHub CLI OAuth Client ID for Device Flow
 CLIENT_ID = "178c6fc778ccc68e1d6a"
+TOKEN_CACHE = r"C:\Users\ponys\.gemini\antigravity\brain\e0e95c9d-50d8-45f4-bbb0-ecef5aab082b\scratch\.gh_token"
 
 
-def main() -> None:
+def get_or_request_token() -> str:
+    if os.path.exists(TOKEN_CACHE):
+        with open(TOKEN_CACHE, "r", encoding="utf-8") as f:
+            cached = f.read().strip()
+            if cached:
+                return cached
+
     req_data = urllib.parse.urlencode({
         "client_id": CLIENT_ID,
         "scope": "repo workflow",
@@ -62,9 +69,11 @@ def main() -> None:
             token_info = json.loads(poll_resp.read().decode("utf-8"))
 
         if "access_token" in token_info:
-            print("Authorization received! Deploying repository and starting APK build...", flush=True)
-            create_repo_and_push(token_info["access_token"])
-            return
+            token = token_info["access_token"]
+            os.makedirs(os.path.dirname(TOKEN_CACHE), exist_ok=True)
+            with open(TOKEN_CACHE, "w", encoding="utf-8") as f:
+                f.write(token)
+            return token
 
         error = token_info.get("error")
         if error == "authorization_pending":
@@ -78,6 +87,12 @@ def main() -> None:
 
     print("Timed out waiting for GitHub device authorization.", flush=True)
     sys.exit(1)
+
+
+def main() -> None:
+    token = get_or_request_token()
+    print("Authorization ready! Deploying fixed workflow and starting APK build...", flush=True)
+    create_repo_and_push(token)
 
 
 if __name__ == "__main__":

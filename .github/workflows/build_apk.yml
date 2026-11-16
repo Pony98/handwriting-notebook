@@ -15,22 +15,35 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
+      - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
 
-      - name: Install dependencies
-        run: flutter pub get
+      - name: Prepare Android project & dependencies
+        run: |
+          rm -rf android pubspec.lock
+          flutter create --platforms=android --project-name handwriting_notebook .
+          flutter pub get
 
       - name: Build Release APK
-        run: flutter build apk --release
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter build apk --release 2>&1 | tee build.log || {
+            ERR_MSG=$(grep -E "Error:|Exception:|FAILURE:|What went wrong" -A 15 build.log | tail -n 35 | tr '\n' ' ')
+            if [ -z "$ERR_MSG" ]; then
+              ERR_MSG=$(tail -n 35 build.log | tr '\n' ' ')
+            fi
+            echo "::error title=APK Build Error::$ERR_MSG"
+            exit 1
+          }
 
       - name: Rename APK for easy installation
         run: cp build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/HandwritingNotebook.apk

@@ -3,11 +3,9 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import 'package:gal/gal.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:printing/printing.dart';
 import 'package:share_plus/share_plus.dart';
 
 class ExportHelper {
@@ -25,7 +23,7 @@ class ExportHelper {
     return byteData?.buffer.asUint8List();
   }
 
-  /// Exports captured page as PNG to Gallery or Share sheet
+  /// Exports captured page as PNG image
   static Future<void> exportAsImage({
     required BuildContext context,
     required GlobalKey boundaryKey,
@@ -39,22 +37,13 @@ class ExportHelper {
     final file = File('${tempDir.path}/${safeName}_page.png');
     await file.writeAsBytes(pngBytes);
 
-    try {
-      await Gal.putImage(file.path);
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('បានរក្សាទុករូបភាពចូលក្នុងទូរស័ព្ទរួចរាល់!'),
-          ),
-        );
-      }
-    } catch (_) {
-      // Fallback to share sheet if gallery permission isn't available on desktop/emulator
-      await Share.shareXFiles([XFile(file.path)], text: title);
-    }
+    await Share.shareXFiles(
+      [XFile(file.path, mimeType: 'image/png')],
+      text: '$title (PNG)',
+    );
   }
 
-  /// Exports captured page as PDF document via Printing/Share preview
+  /// Exports captured page as A4 PDF document
   static Future<void> exportAsPdf({
     required GlobalKey boundaryKey,
     required String title,
@@ -77,9 +66,15 @@ class ExportHelper {
       ),
     );
 
-    await Printing.layoutPdf(
-      name: '$title.pdf',
-      onLayout: (PdfPageFormat format) async => pdf.save(),
+    final pdfBytes = await pdf.save();
+    final tempDir = await getTemporaryDirectory();
+    final safeName = title.replaceAll(RegExp(r'[^\w\s-]'), '_');
+    final file = File('${tempDir.path}/${safeName}.pdf');
+    await file.writeAsBytes(pdfBytes);
+
+    await Share.shareXFiles(
+      [XFile(file.path, mimeType: 'application/pdf')],
+      text: '$title (PDF)',
     );
   }
 }

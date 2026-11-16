@@ -140,25 +140,31 @@ class _CreateNotebookDialogState extends State<CreateNotebookDialog> {
               ),
             ),
             const SizedBox(height: 14),
-            DropdownButtonFormField<String?>(
-              initialValue: _selectedFolderId,
+            InputDecorator(
               decoration: const InputDecoration(
                 labelText: 'ដាក់ក្នុង Folder',
                 border: OutlineInputBorder(),
+                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
               ),
-              items: [
-                const DropdownMenuItem<String?>(
-                  value: null,
-                  child: Text('មិនដាក់ក្នុង Folder (ទូទៅ)'),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String?>(
+                  value: _selectedFolderId,
+                  isExpanded: true,
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text('មិនដាក់ក្នុង Folder (ទូទៅ)'),
+                    ),
+                    ...widget.folders.map(
+                      (f) => DropdownMenuItem<String?>(
+                        value: f.id,
+                        child: Text(f.name),
+                      ),
+                    ),
+                  ],
+                  onChanged: (val) => setState(() => _selectedFolderId = val),
                 ),
-                ...widget.folders.map(
-                  (f) => DropdownMenuItem<String?>(
-                    value: f.id,
-                    child: Text(f.name),
-                  ),
-                ),
-              ],
-              onChanged: (val) => setState(() => _selectedFolderId = val),
+              ),
             ),
             const SizedBox(height: 14),
             const Text(

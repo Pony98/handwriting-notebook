@@ -190,16 +190,11 @@ class _ZoomWritingPadState extends State<ZoomWritingPad> {
                           children: [
                             // 1. Magnified Viewport of the actual Virtual Page!
                             Transform(
-                              transform: Matrix4.diagonal3Values(
-                                scale,
-                                scale,
-                                1.0,
-                              )..translateByDouble(
-                                  -zoomRect.left,
-                                  -zoomRect.top,
-                                  0.0,
-                                  1.0,
-                                ),
+                              transform: Matrix4.identity()
+                                ..setEntry(0, 0, scale)
+                                ..setEntry(1, 1, scale)
+                                ..setEntry(0, 3, -zoomRect.left * scale)
+                                ..setEntry(1, 3, -zoomRect.top * scale),
                               child: SizedBox(
                                 width: CanvasConstants.pageWidth,
                                 height: CanvasConstants.pageHeight,
